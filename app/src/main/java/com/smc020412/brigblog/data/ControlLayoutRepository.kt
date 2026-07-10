@@ -54,7 +54,7 @@ class ControlLayoutRepository(
     companion object {
         private const val KEY_LAYOUT = "layout"
         private const val KEY_VERSION = "layout_version"
-        private const val LAYOUT_VERSION = 5
+        private const val LAYOUT_VERSION = 6
         private const val MIN_SIZE_DP = 44f
         private const val MAX_SIZE_DP = 86f
     }

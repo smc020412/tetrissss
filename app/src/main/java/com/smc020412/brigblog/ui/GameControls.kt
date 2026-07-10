@@ -42,6 +42,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+private const val MoveHorizontalRepeatDelayMs = 180L
+private const val SoftDropRepeatDelayMs = 110L
+
 @Composable
 fun GameControls(
     onMoveLeft: () -> Unit,
@@ -61,10 +64,10 @@ fun GameControls(
 ) {
     val actions = remember(onMoveLeft, onMoveRight, onSoftDrop, onHardDrop, onRotateLeft, onRotateRight, onHold) {
         mapOf(
-            ControlAction.MoveLeft to ControlBinding("<", onMoveLeft, repeatable = true, shape = PadButtonShape.Pill),
-            ControlAction.MoveRight to ControlBinding(">", onMoveRight, repeatable = true, shape = PadButtonShape.Pill),
+            ControlAction.MoveLeft to ControlBinding("<", onMoveLeft, repeatable = true, repeatDelayMs = MoveHorizontalRepeatDelayMs, shape = PadButtonShape.Pill),
+            ControlAction.MoveRight to ControlBinding(">", onMoveRight, repeatable = true, repeatDelayMs = MoveHorizontalRepeatDelayMs, shape = PadButtonShape.Pill),
             ControlAction.HardDrop to ControlBinding("HD", onHardDrop, repeatable = false, shape = PadButtonShape.Round),
-            ControlAction.SoftDrop to ControlBinding("D", onSoftDrop, repeatable = true, shape = PadButtonShape.Round),
+            ControlAction.SoftDrop to ControlBinding("D", onSoftDrop, repeatable = true, repeatDelayMs = SoftDropRepeatDelayMs, shape = PadButtonShape.Round),
             ControlAction.Hold to ControlBinding("H", onHold, repeatable = false, shape = PadButtonShape.Round),
             ControlAction.RotateRight to ControlBinding("R+", onRotateRight, repeatable = false, shape = PadButtonShape.Round),
             ControlAction.RotateLeft to ControlBinding("R-", onRotateLeft, repeatable = false, shape = PadButtonShape.Round)
@@ -83,7 +86,8 @@ fun GameControls(
         Box(modifier = Modifier.fillMaxSize()) {
             normalized.forEach { placement ->
                 val binding = actions.getValue(placement.action)
-                val buttonSizePx = with(density) { placement.sizeDp.dp.toPx() }
+                val renderedSizeDp = placement.sizeDp * LocalGameUiScale.current
+                val buttonSizePx = with(density) { renderedSizeDp.dp.toPx() }
                 val x = (placement.xRatio * widthPx - buttonSizePx / 2f).roundToInt()
                 val y = (placement.yRatio * heightPx - buttonSizePx / 2f).roundToInt()
 
@@ -91,11 +95,12 @@ fun GameControls(
                     symbol = binding.symbol,
                     onPress = binding.onPress,
                     repeatable = binding.repeatable,
+                    repeatDelayMs = binding.repeatDelayMs,
                     enabled = enabled,
                     editMode = editMode,
                     selected = editMode && selectedAction == placement.action,
                     shape = binding.shape,
-                    sizeDp = placement.sizeDp,
+                    sizeDp = renderedSizeDp,
                     onSelect = { onControlSelected(placement.action) },
                     onDragBy = { dxRatio, dyRatio ->
                         onPlacementDelta(placement.action, dxRatio, dyRatio)
@@ -113,6 +118,7 @@ private fun PadButton(
     symbol: String,
     onPress: () -> Unit,
     repeatable: Boolean,
+    repeatDelayMs: Long,
     enabled: Boolean,
     editMode: Boolean,
     selected: Boolean,
@@ -179,7 +185,7 @@ private fun PadButton(
                             var repeatJob: Job? = null
                             if (repeatable) {
                                 repeatJob = scope.launch {
-                                    delay(GameConstants.MOVE_REPEAT_DELAY_MS)
+                                    delay(repeatDelayMs)
                                     while (isActive) {
                                         currentOnPress()
                                         delay(GameConstants.MOVE_REPEAT_RATE_MS)
@@ -216,6 +222,7 @@ private data class ControlBinding(
     val symbol: String,
     val onPress: () -> Unit,
     val repeatable: Boolean,
+    val repeatDelayMs: Long = GameConstants.MOVE_REPEAT_DELAY_MS,
     val shape: PadButtonShape
 )
 

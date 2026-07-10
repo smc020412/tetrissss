@@ -43,7 +43,7 @@ fun NextPreview(
     modifier: Modifier = Modifier
 ) {
     PreviewPanel(title = "NEXT", compact = compact, modifier = modifier) {
-        Column(verticalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 8.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(if (compact) scaledDp(6f) else scaledDp(10f))) {
             pieces.take(maxPieces).forEach { MiniPiece(it, heightDp = miniHeightDp) }
         }
     }
@@ -63,12 +63,12 @@ private fun PreviewPanel(
         modifier = modifier
     ) {
         Column(
-            modifier = Modifier.padding(if (compact) 6.dp else 10.dp),
-            verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 8.dp)
+            modifier = Modifier.padding(if (compact) scaledDp(6f) else scaledDp(10f)),
+            verticalArrangement = Arrangement.spacedBy(if (compact) scaledDp(4f) else scaledDp(8f))
         ) {
             Text(
                 title,
-                style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,
+                style = scaledTextStyle(if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium),
                 color = GameColors.MutedText,
                 maxLines = 1
             )

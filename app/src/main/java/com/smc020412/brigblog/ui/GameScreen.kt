@@ -4,7 +4,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
@@ -26,6 +24,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,10 +38,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -65,6 +64,17 @@ import kotlin.random.Random
 private const val SurvivalAttackWarningMs = 820L
 private const val SurvivalAttackStrikeMs = 430L
 private const val SurvivalThreatChargeMs = 5_000L
+
+val LocalGameUiScale = androidx.compose.runtime.staticCompositionLocalOf { 1f }
+
+@Composable
+fun scaledDp(value: Float) = (value * LocalGameUiScale.current).dp
+
+@Composable
+fun scaledTextStyle(style: TextStyle): TextStyle {
+    val scale = LocalGameUiScale.current
+    return if (scale >= 0.99f) style else style.copy(fontSize = style.fontSize * scale)
+}
 
 @Composable
 fun GameScreen() {
@@ -111,6 +121,12 @@ fun GameScreen() {
 
     audio.setVolume(soundVolume)
     haptic.enabled = hapticEnabled
+
+    fun updateSoundVolume(value: Float) {
+        val normalized = value.coerceIn(0f, 1f)
+        soundVolume = normalized
+        audio.setVolume(normalized)
+    }
 
     DisposableEffect(audio) {
         onDispose { audio.release() }
@@ -199,6 +215,18 @@ fun GameScreen() {
         action()
     }
 
+    fun closeControlsEditor(saveLayout: Boolean = true) {
+        if (saveLayout) {
+            controlLayoutRepository.save(controlPlacements)
+        }
+        controlsEditMode = false
+        showControlsEditor = false
+        if (isGameModeActive() && game.isPaused && !game.isGameOver) {
+            showSettings = true
+        }
+        selectedControlAction = DefaultControlLayout.placements.first().action
+    }
+
     fun randomSurvivalAttack(): SurvivalAttackKind =
         if (Random.nextBoolean()) SurvivalAttackKind.RisingGarbage else SurvivalAttackKind.FallingGarbage
 
@@ -266,14 +294,25 @@ fun GameScreen() {
             appMode == AppMode.MainMenu && showMainMenuSettings -> showMainMenuSettings = false
             appMode == AppMode.MainMenu && showMainMenuLeaderboard -> showMainMenuLeaderboard = false
             appMode == AppMode.MainMenu && showMainMenuTimeSetup -> showMainMenuTimeSetup = false
-            showMainMenuConfirm -> showMainMenuConfirm = false
-            showRestartConfirm -> showRestartConfirm = false
-                            showControlsEditor -> {
-                                controlsEditMode = false
-                                showControlsEditor = false
-                                selectedControlAction = DefaultControlLayout.placements.first().action
-                            }
-            showSettings -> showSettings = false
+            showMainMenuConfirm -> {
+                showMainMenuConfirm = false
+                if (isGameModeActive() && game.isPaused && !game.isGameOver) {
+                    showSettings = true
+                }
+            }
+            showRestartConfirm -> {
+                showRestartConfirm = false
+                if (isGameModeActive() && game.isPaused && !game.isGameOver) {
+                    showSettings = true
+                }
+            }
+            showControlsEditor -> closeControlsEditor()
+            showSettings -> {
+                showSettings = false
+                if (isGameModeActive() && game.isPaused && !game.isGameOver) {
+                    game = game.copy(isPaused = false)
+                }
+            }
             game.isGameOver -> showMainMenuConfirm = true
             isGameModeActive() -> {
                 if (!game.isPaused) {
@@ -301,31 +340,6 @@ fun GameScreen() {
 
             val gameModeActive = appMode == AppMode.ClassicGame || appMode == AppMode.TimeGame || appMode == AppMode.SurvivalGame
             if (gameModeActive && !game.isPaused && !game.isGameOver && !showSettings && !showRestartConfirm && !showMainMenuConfirm && !showControlsEditor) {
-                if (appMode == AppMode.SurvivalGame && game.attackObjects.isNotEmpty()) {
-                    val attacked = engine.tickSurvivalAttacks(game, delta)
-                    val finishedAttack = game.attackObjects.isNotEmpty() && attacked.attackObjects.isEmpty()
-                    applyState(
-                        next = attacked,
-                        sound = if (finishedAttack) GameSoundEvent.HardDrop else null,
-                        pulse = if (finishedAttack) GameHapticEvent.HardDrop else null
-                    )
-                    if (attacked.isGameOver) continue
-                }
-
-                if (appMode == AppMode.SurvivalGame && game.attackObjects.isEmpty() && pendingSurvivalAttacks.isNotEmpty()) {
-                    val nextAttack = pendingSurvivalAttacks.first()
-                    pendingSurvivalAttacks = pendingSurvivalAttacks.drop(1)
-                    applyState(engine.startSurvivalAttack(game, nextAttack), GameSoundEvent.Menu, GameHapticEvent.Menu)
-                }
-
-                if (appMode == AppMode.SurvivalGame && !game.isClearingLines) {
-                    survivalThreatElapsed += delta
-                    if (survivalThreatElapsed >= SurvivalThreatChargeMs) {
-                        survivalThreatElapsed %= SurvivalThreatChargeMs
-                        pendingSurvivalAttacks = pendingSurvivalAttacks + randomSurvivalAttack()
-                    }
-                }
-
                 if (appMode == AppMode.TimeGame) {
                     timeRemainingMs = (timeRemainingMs - delta).coerceAtLeast(0L)
                     if (timeRemainingMs == 0L) {
@@ -351,7 +365,35 @@ fun GameScreen() {
                             applyState(engine.finishLineClear(game))
                         }
                     }
-                } else if (engine.isGrounded(game)) {
+                    continue
+                }
+
+                if (appMode == AppMode.SurvivalGame && game.attackObjects.isNotEmpty()) {
+                    val attacked = engine.tickSurvivalAttacks(game, delta)
+                    val finishedAttack = game.attackObjects.isNotEmpty() && attacked.attackObjects.isEmpty()
+                    applyState(
+                        next = attacked,
+                        sound = if (finishedAttack) GameSoundEvent.HardDrop else null,
+                        pulse = if (finishedAttack) GameHapticEvent.HardDrop else null
+                    )
+                    if (attacked.isGameOver) continue
+                }
+
+                if (appMode == AppMode.SurvivalGame && game.attackObjects.isEmpty() && pendingSurvivalAttacks.isNotEmpty()) {
+                    val nextAttack = pendingSurvivalAttacks.first()
+                    pendingSurvivalAttacks = pendingSurvivalAttacks.drop(1)
+                    applyState(engine.startSurvivalAttack(game, nextAttack), GameSoundEvent.Menu, GameHapticEvent.Menu)
+                }
+
+                if (appMode == AppMode.SurvivalGame) {
+                    survivalThreatElapsed += delta
+                    if (survivalThreatElapsed >= SurvivalThreatChargeMs) {
+                        survivalThreatElapsed %= SurvivalThreatChargeMs
+                        pendingSurvivalAttacks = pendingSurvivalAttacks + randomSurvivalAttack()
+                    }
+                }
+
+                if (engine.isGrounded(game)) {
                     fallElapsed = 0L
                     lockElapsed += delta
                     if (lockElapsed >= GameConstants.LOCK_DELAY_MS) {
@@ -376,7 +418,6 @@ fun GameScreen() {
         contentColor = GameColors.Text,
         modifier = Modifier
             .fillMaxSize()
-            .safeDrawingPadding()
     ) {
         BoxWithConstraints(
             modifier = Modifier
@@ -432,7 +473,7 @@ fun GameScreen() {
                             showMainMenuSettings = true
                         }
                     },
-                    onVolumeChange = { soundVolume = it },
+                    onVolumeChange = ::updateSoundVolume,
                     onHapticToggle = { uiAction { hapticEnabled = !hapticEnabled } },
                     onCloseSettings = { uiAction { showMainMenuSettings = false } },
                     onCloseLeaderboard = { uiAction { showMainMenuLeaderboard = false } },
@@ -488,7 +529,6 @@ fun GameScreen() {
                             }
                         )
                         controlPlacements = updated
-                        controlLayoutRepository.save(updated)
                     },
                     enabled = !panelActive,
                     modifier = controlsModifier
@@ -517,14 +557,43 @@ fun GameScreen() {
                     selectedControlAction = selectedControlAction,
                     lineClearProgress = lineClearProgress,
                     noiseTimeMs = fallElapsed + lockElapsed + lineClearElapsed,
-                    onResume = { uiAction { game = game.copy(isPaused = false) } },
-                    onRestartRequest = { uiAction { showRestartConfirm = true } },
+                    onResume = {
+                        uiAction {
+                            showSettings = false
+                            game = game.copy(isPaused = false)
+                        }
+                    },
+                    onRestartRequest = {
+                        uiAction {
+                            showSettings = false
+                            showRestartConfirm = true
+                        }
+                    },
                     onRestartConfirm = { uiAction(GameSoundEvent.Start) { resetGame() } },
-                    onRestartDismiss = { uiAction { showRestartConfirm = false } },
-                    onMainMenuRequest = { uiAction { showMainMenuConfirm = true } },
+                    onRestartDismiss = {
+                        uiAction {
+                            showRestartConfirm = false
+                            if (isGameModeActive() && game.isPaused && !game.isGameOver) {
+                                showSettings = true
+                            }
+                        }
+                    },
+                    onMainMenuRequest = {
+                        uiAction {
+                            showSettings = false
+                            showMainMenuConfirm = true
+                        }
+                    },
                     onMainMenuConfirm = { uiAction { goToMainMenu() } },
-                    onMainMenuDismiss = { uiAction { showMainMenuConfirm = false } },
-                    onVolumeChange = { soundVolume = it },
+                    onMainMenuDismiss = {
+                        uiAction {
+                            showMainMenuConfirm = false
+                            if (isGameModeActive() && game.isPaused && !game.isGameOver) {
+                                showSettings = true
+                            }
+                        }
+                    },
+                    onVolumeChange = ::updateSoundVolume,
                     onHapticToggle = { uiAction { hapticEnabled = !hapticEnabled } },
                     onOpenControlsEditor = {
                         uiAction {
@@ -546,7 +615,6 @@ fun GameScreen() {
                             }
                         )
                         controlPlacements = updated
-                        controlLayoutRepository.save(updated)
                     },
                     onControlsReset = {
                         uiAction {
@@ -557,13 +625,12 @@ fun GameScreen() {
                     onCloseSettings = {
                         uiAction {
                             showSettings = false
+                            game = game.copy(isPaused = false)
                         }
                     },
                     onCloseControlsEditor = {
                         uiAction {
-                            controlsEditMode = false
-                            showControlsEditor = false
-                            selectedControlAction = DefaultControlLayout.placements.first().action
+                            closeControlsEditor()
                         }
                     },
                     modifier = modifier
@@ -575,7 +642,6 @@ fun GameScreen() {
                     game = game,
                     bestScore = activeScores.firstOrNull() ?: 0,
                     inputLocked = panelActive,
-                    onPause = { if (!inputLocked) uiAction { game = game.copy(isPaused = true) } },
                     onSettings = {
                         if (!inputLocked) {
                             uiAction {
@@ -592,7 +658,6 @@ fun GameScreen() {
                     game = game,
                     bestScore = activeScores.firstOrNull() ?: 0,
                     inputLocked = panelActive,
-                    onPause = { if (!inputLocked) uiAction { game = game.copy(isPaused = true) } },
                     onSettings = {
                         if (!inputLocked) {
                             uiAction {
@@ -623,6 +688,8 @@ private enum class LeaderboardCategory {
 }
 
 private enum class TimeLeaderboardDuration(val label: String, val seconds: Int) {
+    ThirtySeconds("0:30", 30),
+    OneMinute("1:00", 60),
     NinetySeconds("1:30", 90),
     TwoMinutes("2:00", 120),
     TwoAndHalfMinutes("2:30", 150),
@@ -680,64 +747,72 @@ private fun MainMenuScreen(
         }
     }
 
-    Box(
-        modifier = modifier,
-        contentAlignment = Alignment.Center
-    ) {
-        NeonBubbleBackground(
-            bubbles = bubbles,
-            timeMs = timeMs,
-            modifier = Modifier.fillMaxSize()
-        )
+    BoxWithConstraints(modifier = modifier) {
+        val widthScale = (maxWidth.value / 420f).coerceIn(0.78f, 1f)
+        val heightScale = (maxHeight.value / 860f).coerceIn(0.74f, 1f)
+        val menuScale = minOf(widthScale, heightScale).coerceIn(0.74f, 1f)
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 34.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            PixelLogo(
-                text = "BRIGBLOG",
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(76.dp)
-            )
-            Spacer(Modifier.height(10.dp))
-            MainMenuButton("Classic", onClick = onClassic)
-            MainMenuButton("Time", onClick = onTime)
-            MainMenuButton("Survival", onClick = onSurvival)
-            MainMenuButton("Leaderboard", onClick = onLeaderboard)
-            MainMenuButton("Setting", onClick = onSetting)
-        }
+        CompositionLocalProvider(LocalGameUiScale provides menuScale) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                NeonBubbleBackground(
+                    bubbles = bubbles,
+                    timeMs = timeMs,
+                    modifier = Modifier.fillMaxSize()
+                )
 
-        if (showLeaderboard) {
-            MainMenuLeaderboardPanel(
-                classicScores = classicScores,
-                timeScores = timeScores,
-                survivalScores = survivalScores,
-                onClose = onCloseLeaderboard,
-                modifier = Modifier.align(Alignment.Center)
-            )
-        }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = scaledDp(34f)),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(scaledDp(14f))
+                ) {
+                    PixelLogo(
+                        text = "BRIGBLOG",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(scaledDp(76f))
+                    )
+                    Spacer(Modifier.height(scaledDp(10f)))
+                    MainMenuButton("Classic", onClick = onClassic)
+                    MainMenuButton("Time", onClick = onTime)
+                    MainMenuButton("Survival", onClick = onSurvival)
+                    MainMenuButton("Leaderboard", onClick = onLeaderboard)
+                    MainMenuButton("Setting", onClick = onSetting)
+                }
 
-        if (showTimeSetup) {
-            MainMenuTimeSetupPanel(
-                onSelectDuration = onTimeDurationSelected,
-                onClose = onCloseTimeSetup,
-                modifier = Modifier.align(Alignment.Center)
-            )
-        }
+                if (showLeaderboard) {
+                    MainMenuLeaderboardPanel(
+                        classicScores = classicScores,
+                        timeScores = timeScores,
+                        survivalScores = survivalScores,
+                        onClose = onCloseLeaderboard,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
 
-        if (showSettings) {
-            MainMenuSettingsPanel(
-                volume = soundVolume,
-                hapticEnabled = hapticEnabled,
-                onVolumeChange = onVolumeChange,
-                onHapticToggle = onHapticToggle,
-                onClose = onCloseSettings,
-                modifier = Modifier.align(Alignment.Center)
-            )
+                if (showTimeSetup) {
+                    MainMenuTimeSetupPanel(
+                        onSelectDuration = onTimeDurationSelected,
+                        onClose = onCloseTimeSetup,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+
+                if (showSettings) {
+                    MainMenuSettingsPanel(
+                        volume = soundVolume,
+                        hapticEnabled = hapticEnabled,
+                        onVolumeChange = onVolumeChange,
+                        onHapticToggle = onHapticToggle,
+                        onClose = onCloseSettings,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+            }
         }
     }
 }
@@ -760,20 +835,20 @@ private fun MainMenuLeaderboardPanel(
         tonalElevation = 4.dp,
         modifier = modifier
             .fillMaxWidth(0.88f)
-            .padding(12.dp)
+            .padding(scaledDp(12f))
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.padding(scaledDp(14f)),
+            verticalArrangement = Arrangement.spacedBy(scaledDp(10f))
         ) {
             Text(
                 text = "Leaderboard",
-                style = MaterialTheme.typography.titleMedium,
+                style = scaledTextStyle(MaterialTheme.typography.titleMedium),
                 fontWeight = FontWeight.Bold
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(scaledDp(8f))
             ) {
                 LeaderboardCategoryButton(
                     label = "Classic",
@@ -795,22 +870,32 @@ private fun MainMenuLeaderboardPanel(
                 )
             }
             if (category == LeaderboardCategory.Time) {
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(scaledDp(6f))
                 ) {
-                    TimeLeaderboardDuration.values().forEach { duration ->
-                        LeaderboardCategoryButton(
-                            label = duration.label,
-                            selected = timeDuration == duration,
-                            onClick = { timeDuration = duration },
-                            modifier = Modifier.weight(1f)
-                        )
+                    TimeLeaderboardDuration.values().toList().chunked(3).forEach { rowDurations ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(scaledDp(6f))
+                        ) {
+                            rowDurations.forEach { duration ->
+                                LeaderboardCategoryButton(
+                                    label = duration.label,
+                                    selected = timeDuration == duration,
+                                    onClick = { timeDuration = duration },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            repeat(3 - rowDurations.size) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
                     }
                 }
             }
             Column(
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(scaledDp(4f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 repeat(10) { index ->
@@ -819,7 +904,7 @@ private fun MainMenuLeaderboardPanel(
                         LeaderboardCategory.Time -> timeScores[timeDuration].orEmpty().getOrNull(index)?.toString().orEmpty()
                         LeaderboardCategory.Survival -> survivalScores.getOrNull(index)?.toString().orEmpty()
                     }
-                    Row(
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(
@@ -829,20 +914,20 @@ private fun MainMenuLeaderboardPanel(
                                     GameColors.Board.copy(alpha = 0.18f)
                                 }
                             )
-                            .padding(horizontal = 10.dp, vertical = 5.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(horizontal = scaledDp(10f), vertical = scaledDp(5f)),
                     ) {
                         Text(
                             text = "${index + 1}.",
-                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.align(Alignment.CenterStart),
+                            style = scaledTextStyle(MaterialTheme.typography.bodyMedium),
                             color = GameColors.MutedText,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
                             text = score,
-                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.align(Alignment.Center),
+                            style = scaledTextStyle(MaterialTheme.typography.bodyMedium),
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold
                         )
@@ -850,7 +935,7 @@ private fun MainMenuLeaderboardPanel(
                 }
             }
             Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
-                Text("Close", style = MaterialTheme.typography.labelSmall)
+                Text("Close", style = scaledTextStyle(MaterialTheme.typography.labelSmall))
             }
         }
     }
@@ -869,16 +954,16 @@ private fun MainMenuTimeSetupPanel(
         tonalElevation = 4.dp,
         modifier = modifier
             .fillMaxWidth(0.88f)
-            .padding(12.dp)
+            .padding(scaledDp(12f))
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.padding(scaledDp(14f)),
+            verticalArrangement = Arrangement.spacedBy(scaledDp(10f))
         ) {
-            Text("Time Attack", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("Time Attack", style = scaledTextStyle(MaterialTheme.typography.titleMedium), fontWeight = FontWeight.Bold)
             Text(
                 "Score as high as possible before time runs out.",
-                style = MaterialTheme.typography.bodySmall,
+                style = scaledTextStyle(MaterialTheme.typography.bodySmall),
                 color = GameColors.MutedText
             )
             TimeLeaderboardDuration.values().forEach { duration ->
@@ -888,7 +973,7 @@ private fun MainMenuTimeSetupPanel(
                 )
             }
             Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
-                Text("Close", style = MaterialTheme.typography.labelSmall)
+                Text("Close", style = scaledTextStyle(MaterialTheme.typography.labelSmall))
             }
         }
     }
@@ -905,7 +990,7 @@ private fun LeaderboardCategoryButton(
         onClick = onClick,
         modifier = modifier,
         border = BorderStroke(
-            width = 1.dp,
+            width = scaledDp(1f),
             color = if (selected) GameColors.Accent.copy(alpha = 0.95f) else GameColors.Grid.copy(alpha = 0.72f)
         ),
         colors = ButtonDefaults.textButtonColors(
@@ -915,7 +1000,7 @@ private fun LeaderboardCategoryButton(
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.labelSmall,
+            style = scaledTextStyle(MaterialTheme.typography.labelSmall),
             fontWeight = FontWeight.Bold,
             maxLines = 1
         )
@@ -1035,7 +1120,7 @@ private fun MainMenuButton(
         enabled = enabled,
         modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp),
+            .height(scaledDp(48f)),
         colors = ButtonDefaults.buttonColors(
             containerColor = GameColors.Panel,
             contentColor = GameColors.Accent,
@@ -1045,6 +1130,7 @@ private fun MainMenuButton(
     ) {
         Text(
             text = label,
+            style = scaledTextStyle(MaterialTheme.typography.labelLarge),
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
             maxLines = 1
@@ -1068,14 +1154,14 @@ private fun MainMenuSettingsPanel(
         tonalElevation = 4.dp,
         modifier = modifier
             .fillMaxWidth(0.88f)
-            .padding(12.dp)
+            .padding(scaledDp(12f))
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.padding(scaledDp(14f)),
+            verticalArrangement = Arrangement.spacedBy(scaledDp(8f))
         ) {
-            Text("Setting", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Text("Sound volume", style = MaterialTheme.typography.bodySmall, color = GameColors.MutedText)
+            Text("Setting", style = scaledTextStyle(MaterialTheme.typography.titleMedium), fontWeight = FontWeight.Bold)
+            Text("Sound volume", style = scaledTextStyle(MaterialTheme.typography.bodySmall), color = GameColors.MutedText)
             androidx.compose.material3.Slider(value = volume, onValueChange = onVolumeChange)
             MainMenuSettingActionButton(
                 label = if (hapticEnabled) "Haptic On" else "Haptic Off",
@@ -1083,7 +1169,7 @@ private fun MainMenuSettingsPanel(
                 highlighted = hapticEnabled
             )
             Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
-                Text("Close", style = MaterialTheme.typography.labelSmall)
+                Text("Close", style = scaledTextStyle(MaterialTheme.typography.labelSmall))
             }
         }
     }
@@ -1099,7 +1185,7 @@ private fun MainMenuSettingActionButton(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
         border = BorderStroke(
-            width = 1.dp,
+            width = scaledDp(1f),
             color = if (highlighted) GameColors.Accent.copy(alpha = 0.95f) else GameColors.Grid.copy(alpha = 0.72f)
         ),
         colors = ButtonDefaults.textButtonColors(
@@ -1109,7 +1195,7 @@ private fun MainMenuSettingActionButton(
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.labelSmall,
+            style = scaledTextStyle(MaterialTheme.typography.labelSmall),
             fontWeight = FontWeight.Bold,
             maxLines = 1
         )
@@ -1265,11 +1351,12 @@ private fun BoardStage(
             showSettings -> SettingsPanel(
                 volume = soundVolume,
                 hapticEnabled = hapticEnabled,
+                onResume = onResume,
+                onRestart = onRestartRequest,
                 onVolumeChange = onVolumeChange,
                 onHapticToggle = onHapticToggle,
                 onOpenControlsEditor = onOpenControlsEditor,
-                onMainMenu = onMainMenuRequest,
-                onClose = onCloseSettings
+                onMainMenu = onMainMenuRequest
             )
             showControlsEditor -> ControlsEditorPanel(
                 placements = controlPlacements,
@@ -1281,11 +1368,6 @@ private fun BoardStage(
             showRestartConfirm -> RestartConfirmPanel(
                 onConfirm = onRestartConfirm,
                 onDismiss = onRestartDismiss
-            )
-            game.isPaused -> PausePanel(
-                onResume = onResume,
-                onRestart = onRestartRequest,
-                onMainMenu = onMainMenuRequest
             )
         }
     }
@@ -1302,10 +1384,10 @@ private fun SurvivalBoardFrame(
 ) {
     Row(
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(scaledDp(5f)),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        SurvivalThreatGauge(ratio = threatRatio, modifier = Modifier.width(8.dp).fillMaxHeight())
+        SurvivalThreatGauge(ratio = threatRatio, modifier = Modifier.width(scaledDp(8f)).fillMaxHeight())
         GameBoardCanvas(
             state = game,
             engine = engine,
@@ -1315,7 +1397,7 @@ private fun SurvivalBoardFrame(
                 .weight(1f)
                 .fillMaxHeight()
         )
-        SurvivalThreatGauge(ratio = threatRatio, modifier = Modifier.width(8.dp).fillMaxHeight())
+        SurvivalThreatGauge(ratio = threatRatio, modifier = Modifier.width(scaledDp(8f)).fillMaxHeight())
     }
 }
 
@@ -1338,11 +1420,11 @@ private fun TimeBoardFrame(
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(5.dp)
+        verticalArrangement = Arrangement.spacedBy(scaledDp(5f))
     ) {
         Text(
             text = formatTime(timeRemainingMs),
-            style = MaterialTheme.typography.titleMedium,
+            style = scaledTextStyle(MaterialTheme.typography.titleMedium),
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
             color = timeGaugeColor(timeRatio),
@@ -1352,10 +1434,10 @@ private fun TimeBoardFrame(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            horizontalArrangement = Arrangement.spacedBy(scaledDp(5f)),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TimeGauge(ratio = timeRatio, modifier = Modifier.width(8.dp).fillMaxHeight())
+            TimeGauge(ratio = timeRatio, modifier = Modifier.width(scaledDp(8f)).fillMaxHeight())
             GameBoardCanvas(
                 state = game,
                 engine = engine,
@@ -1365,7 +1447,7 @@ private fun TimeBoardFrame(
                     .weight(1f)
                     .fillMaxHeight()
             )
-            TimeGauge(ratio = timeRatio, modifier = Modifier.width(8.dp).fillMaxHeight())
+            TimeGauge(ratio = timeRatio, modifier = Modifier.width(scaledDp(8f)).fillMaxHeight())
         }
     }
 }
@@ -1434,47 +1516,56 @@ private fun CompactGameLayout(
     game: GameState,
     bestScore: Int,
     inputLocked: Boolean,
-    onPause: () -> Unit,
     onSettings: () -> Unit,
     boardLayer: @Composable (Modifier) -> Unit,
     controls: @Composable (Modifier) -> Unit
 ) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(2.75f)
-                .padding(bottom = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            boardLayer(
-                Modifier
-                    .weight(1f)
-                    .padding(top = 10.dp)
-                    .fillMaxHeight(0.94f)
-            )
-            SidePanel(
-                game = game,
-                bestScore = bestScore,
-                inputLocked = inputLocked,
-                compact = false,
-                onPause = onPause,
-                onSettings = onSettings,
-                modifier = Modifier
-                    .align(Alignment.Top)
-                    .width(118.dp)
-                    .fillMaxHeight()
-            )
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val sidePanelWidth = (maxWidth * 0.27f).coerceIn(88.dp, 118.dp)
+        val widthScale = sidePanelWidth.value / 118f
+        val heightScale = (maxHeight.value / 760f).coerceIn(0.76f, 1f)
+        val hudScale = minOf(widthScale, heightScale).coerceIn(0.72f, 1f)
+        val panelCompact = hudScale < 0.92f
+
+        CompositionLocalProvider(LocalGameUiScale provides hudScale) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(scaledDp(8f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(2.58f)
+                        .padding(bottom = scaledDp(4f)),
+                    horizontalArrangement = Arrangement.spacedBy(scaledDp(8f)),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    boardLayer(
+                        Modifier
+                            .weight(1f)
+                            .padding(top = scaledDp(10f))
+                            .fillMaxHeight(0.89f)
+                    )
+                    SidePanel(
+                        game = game,
+                        bestScore = bestScore,
+                        inputLocked = inputLocked,
+                        compact = panelCompact,
+                        scale = hudScale,
+                        onSettings = onSettings,
+                        modifier = Modifier
+                            .align(Alignment.Top)
+                            .width(sidePanelWidth)
+                            .fillMaxHeight()
+                    )
+                }
+                controls(
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1.04f)
+                )
+            }
         }
-        controls(
-            Modifier
-                .fillMaxWidth()
-                .weight(0.95f)
-        )
     }
 }
 
@@ -1483,7 +1574,6 @@ private fun WideGameLayout(
     game: GameState,
     bestScore: Int,
     inputLocked: Boolean,
-    onPause: () -> Unit,
     onSettings: () -> Unit,
     boardLayer: @Composable (Modifier) -> Unit,
     controls: @Composable (Modifier) -> Unit
@@ -1509,7 +1599,6 @@ private fun WideGameLayout(
                 game = game,
                 bestScore = bestScore,
                 inputLocked = inputLocked,
-                onPause = onPause,
                 onSettings = onSettings
             )
             Spacer(Modifier.weight(0.5f))
@@ -1529,72 +1618,63 @@ private fun SidePanel(
     bestScore: Int,
     inputLocked: Boolean,
     compact: Boolean = false,
-    onPause: () -> Unit,
+    scale: Float = 1f,
     onSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val safeScale = scale.coerceIn(0.72f, 1f)
+    val miniHeightDp = (42f * safeScale).toInt().coerceIn(30, 42)
+    val removedMenuHeightDp = 40f * safeScale
+    val pauseHeightDp = 40f * safeScale
+    val gap = if (compact) (5f * safeScale).dp else (6f * safeScale).dp
+    val topReserveHeightDp = removedMenuHeightDp + if (compact) 5f * safeScale else 6f * safeScale
+
     Column(
         modifier = modifier.fillMaxHeight(),
-        verticalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 6.dp)
+        verticalArrangement = Arrangement.spacedBy(gap)
     ) {
-        MenuButton(
-            onClick = onSettings,
-            enabled = !inputLocked,
-            modifier = Modifier
-                .align(Alignment.End)
-                .padding(top = 0.dp, end = 0.dp)
-        )
+        Spacer(Modifier.height(topReserveHeightDp.dp))
         HoldPreview(
             pieceType = game.heldPiece,
             enabled = game.canHold,
-            miniHeightDp = 42,
+            miniHeightDp = miniHeightDp,
             compact = compact
         )
         NextPreview(
             pieces = game.queue,
             maxPieces = 5,
-            miniHeightDp = 42,
+            miniHeightDp = miniHeightDp,
             compact = compact
         )
         StatsPanel(game, bestScore, compact = true)
         Button(
-            onClick = onPause,
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !inputLocked
+            onClick = onSettings,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(pauseHeightDp.dp),
+            enabled = !inputLocked,
+            contentPadding = ButtonDefaults.TextButtonContentPadding
         ) {
-            Text("Pause", style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium)
+            MenuGlyph()
         }
     }
 }
 
 @Composable
-private fun MenuButton(
-    onClick: () -> Unit,
-    enabled: Boolean,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        color = GameColors.Panel,
-        contentColor = GameColors.Text,
-        shape = MaterialTheme.shapes.small,
-        tonalElevation = 3.dp,
-        modifier = modifier
-            .size(width = 48.dp, height = 40.dp)
-            .alpha(if (enabled) 1f else 0.42f)
-            .clickable(enabled = enabled, onClick = onClick)
+private fun MenuGlyph() {
+    Column(
+        modifier = Modifier
+            .width(scaledDp(22f))
+            .height(scaledDp(16f)),
+        verticalArrangement = Arrangement.SpaceBetween
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            repeat(3) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(3.dp)
-                        .background(GameColors.Accent)
-                )
-            }
+        repeat(3) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(scaledDp(2.4f))
+                    .background(GameColors.Text)
+            )
         }
     }
 }
@@ -1613,8 +1693,8 @@ private fun StatsPanel(
         modifier = modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(if (compact) 6.dp else 10.dp),
-            verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 6.dp)
+            modifier = Modifier.padding(if (compact) scaledDp(6f) else scaledDp(10f)),
+            verticalArrangement = Arrangement.spacedBy(if (compact) scaledDp(2f) else scaledDp(6f))
         ) {
             StatLine("Score", game.score, compact)
             StatLine("Best", bestScore, compact)
@@ -1630,7 +1710,7 @@ private fun StatLine(label: String, value: Int, compact: Boolean = false) {
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        val textStyle = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium
+        val textStyle = scaledTextStyle(if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium)
         Text(label, color = GameColors.MutedText, style = textStyle, maxLines = 1)
         Text(
             value.toString(),

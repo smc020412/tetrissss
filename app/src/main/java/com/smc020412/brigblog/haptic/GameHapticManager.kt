@@ -6,6 +6,9 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 
+private const val HapticAmplitudeMultiplier = 5
+private const val HapticDurationMultiplier = 1.25f
+
 class GameHapticManager(
     context: Context
 ) {
@@ -65,10 +68,20 @@ class GameHapticManager(
         }
 
     private fun oneShot(durationMs: Long, amplitude: Int): VibrationEffect =
-        VibrationEffect.createOneShot(durationMs, amplitude.coerceIn(1, 255))
+        VibrationEffect.createOneShot(boostedDuration(durationMs), boostedAmplitude(amplitude))
 
     private fun waveform(timings: LongArray, amplitudes: IntArray): VibrationEffect =
-        VibrationEffect.createWaveform(timings, amplitudes, -1)
+        VibrationEffect.createWaveform(
+            timings.map(::boostedDuration).toLongArray(),
+            amplitudes.map(::boostedAmplitude).toIntArray(),
+            -1
+        )
+
+    private fun boostedAmplitude(amplitude: Int): Int =
+        if (amplitude == 0) 0 else (amplitude * HapticAmplitudeMultiplier).coerceIn(1, 255)
+
+    private fun boostedDuration(durationMs: Long): Long =
+        (durationMs * HapticDurationMultiplier).toLong().coerceAtLeast(durationMs)
 }
 
 enum class GameHapticEvent(

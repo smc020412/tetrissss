@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -15,51 +16,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-
-@Composable
-fun PausePanel(
-    onResume: () -> Unit,
-    onRestart: () -> Unit,
-    onMainMenu: () -> Unit
-) {
-    BoardPanel {
-        Text("Paused", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Text("Resume, restart, or leave.", style = MaterialTheme.typography.bodySmall, color = GameColors.MutedText)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Button(
-                onClick = onResume,
-                modifier = Modifier.weight(1.25f),
-                contentPadding = ButtonDefaults.TextButtonContentPadding
-            ) {
-                Text(
-                    text = "Resume",
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Clip
-                )
-            }
-            TextButton(
-                onClick = onRestart,
-                modifier = Modifier.weight(1f),
-                contentPadding = ButtonDefaults.TextButtonContentPadding
-            ) {
-                Text(
-                    text = "Restart",
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Clip
-                )
-            }
-        }
-        TextButton(onClick = onMainMenu, modifier = Modifier.fillMaxWidth()) {
-            Text("Main Menu", style = MaterialTheme.typography.labelSmall, maxLines = 1)
-        }
-    }
-}
 
 @Composable
 fun GameOverPanel(
@@ -71,25 +32,79 @@ fun GameOverPanel(
     onMainMenu: () -> Unit
 ) {
     BoardPanel {
-        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Text("Score $score", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
-        Text(rank?.let { "Rank $it" } ?: "Rank -", style = MaterialTheme.typography.bodySmall, color = GameColors.Accent)
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = title.uppercase(),
+            modifier = Modifier.fillMaxWidth(),
+            style = scaledTextStyle(MaterialTheme.typography.headlineSmall),
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+        Text(
+            text = "Score $score",
+            modifier = Modifier.fillMaxWidth(),
+            style = scaledTextStyle(MaterialTheme.typography.titleMedium),
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+        Text(
+            text = rank?.let { "Rank $it" } ?: "Rank -",
+            modifier = Modifier.fillMaxWidth(),
+            style = scaledTextStyle(MaterialTheme.typography.bodyMedium),
+            color = GameColors.Accent,
+            textAlign = TextAlign.Center
+        )
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(scaledDp(2f)),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             repeat(10) { index ->
                 val value = scores.getOrNull(index)
-                Text(
-                    text = "${index + 1}. ${value ?: ""}",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = if (value == score && rank == index + 1) FontWeight.Bold else FontWeight.Normal,
-                    color = if (value == null) GameColors.MutedText else GameColors.Text
-                )
+                val isCurrentScore = value == score && rank == index + 1
+                Surface(
+                    color = if (isCurrentScore) GameColors.Accent.copy(alpha = 0.18f) else GameColors.Panel.copy(alpha = 0f),
+                    contentColor = GameColors.Text,
+                    shape = MaterialTheme.shapes.small,
+                    border = if (isCurrentScore) BorderStroke(scaledDp(1f), GameColors.Accent.copy(alpha = 0.92f)) else null
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = scaledDp(8f), vertical = scaledDp(2f)),
+                        horizontalArrangement = Arrangement.spacedBy(scaledDp(10f)),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${index + 1}.",
+                            modifier = Modifier.width(scaledDp(34f)),
+                            style = scaledTextStyle(MaterialTheme.typography.bodyMedium),
+                            fontWeight = if (isCurrentScore) FontWeight.Black else FontWeight.Normal,
+                            color = when {
+                                isCurrentScore -> GameColors.Accent
+                                value == null -> GameColors.MutedText
+                                else -> GameColors.Text
+                            },
+                            textAlign = TextAlign.End
+                        )
+                        Text(
+                            text = value?.toString().orEmpty(),
+                            modifier = Modifier.width(scaledDp(84f)),
+                            style = scaledTextStyle(MaterialTheme.typography.bodyMedium),
+                            fontWeight = if (isCurrentScore) FontWeight.Black else FontWeight.Normal,
+                            color = when {
+                                isCurrentScore -> GameColors.Accent
+                                value == null -> GameColors.MutedText
+                                else -> GameColors.Text
+                            },
+                            textAlign = TextAlign.Start
+                        )
+                    }
+                }
             }
         }
         Button(onClick = onRestart, modifier = Modifier.fillMaxWidth()) {
-            Text("Restart", style = MaterialTheme.typography.labelSmall)
+            Text("Restart", style = scaledTextStyle(MaterialTheme.typography.labelMedium))
         }
         TextButton(onClick = onMainMenu, modifier = Modifier.fillMaxWidth()) {
-            Text("Main Menu", style = MaterialTheme.typography.labelSmall)
+            Text("Main Menu", style = scaledTextStyle(MaterialTheme.typography.labelMedium))
         }
     }
 }
@@ -100,14 +115,14 @@ fun RestartConfirmPanel(
     onDismiss: () -> Unit
 ) {
     BoardPanel {
-        Text("Restart?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Text("Current score will not be saved.", style = MaterialTheme.typography.bodySmall, color = GameColors.MutedText)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Restart?", style = scaledTextStyle(MaterialTheme.typography.titleMedium), fontWeight = FontWeight.Bold)
+        Text("Current score will not be saved.", style = scaledTextStyle(MaterialTheme.typography.bodySmall), color = GameColors.MutedText)
+        Row(horizontalArrangement = Arrangement.spacedBy(scaledDp(6f))) {
             Button(onClick = onConfirm, modifier = Modifier.weight(1f)) {
-                Text("Yes", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                Text("Yes", style = scaledTextStyle(MaterialTheme.typography.labelSmall), maxLines = 1)
             }
             TextButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
-                Text("No", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                Text("No", style = scaledTextStyle(MaterialTheme.typography.labelSmall), maxLines = 1)
             }
         }
     }
@@ -119,14 +134,14 @@ fun MainMenuConfirmPanel(
     onDismiss: () -> Unit
 ) {
     BoardPanel {
-        Text("Main Menu?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Text("Current game progress will be lost.", style = MaterialTheme.typography.bodySmall, color = GameColors.MutedText)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Main Menu?", style = scaledTextStyle(MaterialTheme.typography.titleMedium), fontWeight = FontWeight.Bold)
+        Text("Current game progress will be lost.", style = scaledTextStyle(MaterialTheme.typography.bodySmall), color = GameColors.MutedText)
+        Row(horizontalArrangement = Arrangement.spacedBy(scaledDp(6f))) {
             Button(onClick = onConfirm, modifier = Modifier.weight(1f)) {
-                Text("Yes", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                Text("Yes", style = scaledTextStyle(MaterialTheme.typography.labelSmall), maxLines = 1)
             }
             TextButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
-                Text("No", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                Text("No", style = scaledTextStyle(MaterialTheme.typography.labelSmall), maxLines = 1)
             }
         }
     }
@@ -136,15 +151,16 @@ fun MainMenuConfirmPanel(
 fun SettingsPanel(
     volume: Float,
     hapticEnabled: Boolean,
+    onResume: () -> Unit,
+    onRestart: () -> Unit,
     onVolumeChange: (Float) -> Unit,
     onHapticToggle: () -> Unit,
     onOpenControlsEditor: () -> Unit,
-    onMainMenu: () -> Unit,
-    onClose: () -> Unit
+    onMainMenu: () -> Unit
 ) {
     BoardPanel {
-        Text("Menu", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Text("Sound volume", style = MaterialTheme.typography.bodySmall, color = GameColors.MutedText)
+        Text("Menu", style = scaledTextStyle(MaterialTheme.typography.titleMedium), fontWeight = FontWeight.Bold)
+        Text("Sound volume", style = scaledTextStyle(MaterialTheme.typography.bodySmall), color = GameColors.MutedText)
         Slider(value = volume, onValueChange = onVolumeChange)
         SettingsActionButton(
             label = if (hapticEnabled) "Haptic On" else "Haptic Off",
@@ -160,8 +176,18 @@ fun SettingsPanel(
             onClick = onMainMenu,
             danger = true
         )
-        Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
-            Text("Close", style = MaterialTheme.typography.labelSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(scaledDp(6f))) {
+            SettingsActionButton(
+                label = "Resume",
+                onClick = onResume,
+                highlighted = true,
+                modifier = Modifier.weight(1.25f)
+            )
+            SettingsActionButton(
+                label = "Restart",
+                onClick = onRestart,
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }
@@ -178,16 +204,16 @@ fun ControlsEditorPanel(
         val normalizedPlacements = DefaultControlLayout.normalized(placements)
         val selectedPlacement = normalizedPlacements.firstOrNull { it.action == selectedAction } ?: normalizedPlacements.first()
 
-        Text("Controls", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Text("Tap a button below, then adjust its size.", style = MaterialTheme.typography.bodySmall, color = GameColors.MutedText)
+        Text("Controls", style = scaledTextStyle(MaterialTheme.typography.titleMedium), fontWeight = FontWeight.Bold)
+        Text("Tap a button below, then adjust its size.", style = scaledTextStyle(MaterialTheme.typography.bodySmall), color = GameColors.MutedText)
         Text(
             text = "Selected ${selectedPlacement.action.controlLabel()}",
-            style = MaterialTheme.typography.labelSmall,
+            style = scaledTextStyle(MaterialTheme.typography.labelSmall),
             fontWeight = FontWeight.Bold
         )
         Text(
             "Size ${selectedPlacement.sizeDp.toInt()}",
-            style = MaterialTheme.typography.bodySmall,
+            style = scaledTextStyle(MaterialTheme.typography.bodySmall),
             color = GameColors.MutedText
         )
         Slider(
@@ -195,12 +221,12 @@ fun ControlsEditorPanel(
             onValueChange = { size -> onButtonSizeChange(selectedPlacement.action, size) },
             valueRange = 44f..86f
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(scaledDp(6f))) {
             TextButton(onClick = onReset, modifier = Modifier.weight(1f)) {
-                Text("Reset", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                Text("Reset", style = scaledTextStyle(MaterialTheme.typography.labelSmall), maxLines = 1)
             }
             Button(onClick = onDone, modifier = Modifier.weight(1f)) {
-                Text("Done", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                Text("Done", style = scaledTextStyle(MaterialTheme.typography.labelSmall), maxLines = 1)
             }
         }
     }
@@ -221,6 +247,7 @@ private fun ControlAction.controlLabel(): String =
 private fun SettingsActionButton(
     label: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     highlighted: Boolean = false,
     danger: Boolean = false
 ) {
@@ -242,8 +269,8 @@ private fun SettingsActionButton(
 
     TextButton(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        border = BorderStroke(1.dp, borderColor.copy(alpha = if (highlighted || danger) 0.95f else 0.72f)),
+        modifier = modifier.fillMaxWidth(),
+        border = BorderStroke(scaledDp(1f), borderColor.copy(alpha = if (highlighted || danger) 0.95f else 0.72f)),
         colors = ButtonDefaults.textButtonColors(
             containerColor = containerColor,
             contentColor = contentColor
@@ -251,7 +278,7 @@ private fun SettingsActionButton(
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.labelSmall,
+            style = scaledTextStyle(MaterialTheme.typography.labelSmall),
             fontWeight = FontWeight.Bold,
             maxLines = 1
         )
@@ -269,11 +296,11 @@ private fun BoardPanel(
         tonalElevation = 4.dp,
         modifier = Modifier
             .fillMaxWidth(0.92f)
-            .padding(12.dp)
+            .padding(scaledDp(12f))
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(7.dp),
+            modifier = Modifier.padding(scaledDp(12f)),
+            verticalArrangement = Arrangement.spacedBy(scaledDp(7f)),
             content = content
         )
     }

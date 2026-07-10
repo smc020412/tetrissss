@@ -245,17 +245,15 @@ class GameEngine(
                 SurvivalAttackKind.FallingGarbage -> {
                     val x = attackObject.x.coerceIn(0, state.board.width - 1)
                     val nextY = attackObject.y + fallingStep
-                    val landingY = landingYForColumn(boardCells, x)
+                    val landingY = safeFallingAttackY(boardCells, x)
 
-                    if (landingY < 0) {
+                    if (landingY == null) {
                         causedGameOver = true
                     } else if (nextY >= landingY) {
-                        if (canPlaceFallingAttack(boardCells, x)) {
-                            boardCells[landingY][x] = PieceType.Garbage
-                        }
-                } else {
-                    nextObjects += attackObject.copy(x = x, y = nextY)
-                }
+                        boardCells[landingY][x] = PieceType.Garbage
+                    } else {
+                        nextObjects += attackObject.copy(x = x, y = nextY)
+                    }
                 }
                 SurvivalAttackKind.RisingGarbage -> {
                     val nextY = attackObject.y - risingStep
@@ -434,7 +432,7 @@ private fun plannedFallingColumns(boardCells: List<List<PieceType?>>): List<Int>
             }
             if (availableColumns.isEmpty()) return@buildList
             val x = availableColumns.random(random)
-            val y = landingYForColumn(plannedBoard, x)
+            val y = safeFallingAttackY(plannedBoard, x) ?: return@buildList
             plannedBoard[y][x] = PieceType.Garbage
             columnCounts[x] = (columnCounts[x] ?: 0) + 1
             add(x)
@@ -446,11 +444,10 @@ private fun canPlaceFallingAttack(
     boardCells: List<List<PieceType?>>,
     x: Int
 ): Boolean {
-    val y = landingYForColumn(boardCells, x)
+    val y = safeFallingAttackY(boardCells, x) ?: return false
     return y in boardCells.indices &&
         x in boardCells[y].indices &&
-        boardCells[y][x] == null &&
-        !wouldCreateCompleteLine(boardCells, x, y)
+        boardCells[y][x] == null
 }
 
     private fun landingYForColumn(boardCells: List<List<PieceType?>>, x: Int): Int {
@@ -464,6 +461,25 @@ private fun canPlaceFallingAttack(
         }
     }
 
+private fun safeFallingAttackY(
+    boardCells: List<List<PieceType?>>,
+    x: Int
+): Int? {
+    val physicalLandingY = landingYForColumn(boardCells, x)
+    if (physicalLandingY !in boardCells.indices) return null
+
+    for (y in physicalLandingY downTo 0) {
+        if (x in boardCells[y].indices &&
+            boardCells[y][x] == null &&
+            !wouldCreateCompleteLine(boardCells, x, y)
+        ) {
+            return y
+        }
+    }
+
+    return null
+}
+
 private fun wouldCreateCompleteLine(
     boardCells: List<List<PieceType?>>,
     x: Int,
@@ -472,11 +488,8 @@ private fun wouldCreateCompleteLine(
     if (y !in boardCells.indices) return false
     val row = boardCells[y]
     if (x !in row.indices || row[x] != null) return false
-    return boardCells.indices.any { rowIndex ->
-        val currentRow = boardCells[rowIndex]
-        currentRow.indices.all { column ->
-            currentRow[column] != null || (rowIndex == y && column == x)
-        }
+    return row.indices.all { column ->
+        row[column] != null || column == x
     }
 }
 
