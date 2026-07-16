@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <rect width="108" height="108" fill="#090B10"/>
+  <g fill="none" stroke-width="0.7">
+    <path d="M0 18H108M0 30H108M0 42H108M0 54H108M0 66H108M0 78H108M0 90H108" stroke="#16717A"/>
+    <path d="M18 0V108M30 0V108M42 0V108M54 0V108M66 0V108M78 0V108M90 0V108" stroke="#4A1742"/>
+  </g>
+  <path d="M30 25H86V82H30Z" fill="#FF4FCB"/>
+  <path d="M23 20H81V78H23Z" fill="#11151D" stroke="#6FF7FF" stroke-width="3"/>
+  <path d="M29 27H75V66H29Z" fill="#05070A" stroke="#D9FDFF" stroke-width="1"/>
+  <path d="M30 36H74M30 45H74M30 54H74M30 63H74" fill="none" stroke="#24545A" stroke-width="0.8"/>
+  <path d="M41 37H49V65H41ZM49 37H63V43H49ZM49 48H62V54H49ZM49 59H63V65H49ZM63 43H69V48H63ZM63 54H69V59H63Z" fill="#FF4FCB"/>
+  <path d="M39 35H47V63H39ZM47 35H61V41H47ZM47 46H60V52H47ZM47 57H61V63H47ZM61 41H67V46H61ZM61 52H67V57H61Z" fill="#EAFBFF"/>
+  <path d="M30 70H51V73H30ZM57 70H62V75H57Z" fill="#6FF7FF"/>
+  <path d="M66 70H73V75H66Z" fill="#FF4FCB"/>
+</svg>

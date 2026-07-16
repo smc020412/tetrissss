@@ -8,6 +8,13 @@ import com.smc020412.brigblog.game.Piece
 import com.smc020412.brigblog.game.PieceType
 import com.smc020412.brigblog.game.SurvivalAttackKind
 import com.smc020412.brigblog.game.SurvivalAttackObject
+import com.smc020412.brigblog.haptic.GameHapticEvent
+import com.smc020412.brigblog.haptic.HapticPulseGate
+import com.smc020412.brigblog.data.insertScore
+import com.smc020412.brigblog.ui.AppMode
+import com.smc020412.brigblog.ui.GameSessionViewModel
+import com.smc020412.brigblog.ui.TimeLeaderboardDuration
+import androidx.lifecycle.SavedStateHandle
 import org.junit.Test
 
 import org.junit.Assert.*
@@ -78,11 +85,15 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun lockingPieceStartsLineClearWhenRowIsFilled() {
+    fun lockingPieceClearsBoardAndSpawnsNextPieceBeforeLineEffectEnds() {
         val engine = GameEngine()
         val bottomY = GameConstants.BOARD_HEIGHT - 1
         val board = boardWithCells { x, y ->
-            if (y == bottomY && x !in 3..6) PieceType.Garbage else null
+            when {
+                y == bottomY && x !in 3..6 -> PieceType.Garbage
+                y == bottomY - 1 && x == 0 -> PieceType.T
+                else -> null
+            }
         }
         val state = stateWithPiece(
             piece = Piece(PieceType.I, rotation = 0, x = 3, y = bottomY - 1),
@@ -91,14 +102,21 @@ class ExampleUnitTest {
 
         val locked = engine.lockCurrent(state)
         val finished = engine.finishLineClear(locked)
+        val moved = engine.move(locked, dx = 1, dy = 0)
 
         assertTrue(locked.isClearingLines)
         assertEquals(listOf(bottomY), locked.lastClearedRows)
         assertEquals(1, locked.lines)
         assertEquals(100, locked.score)
+        assertEquals(PieceType.T, locked.board.cells[bottomY][0])
+        assertNotNull(locked.currentPiece)
+        assertEquals(1, locked.lineClearShiftBlocks.size)
+        assertEquals(bottomY - 1, locked.lineClearShiftBlocks.single().sourceY)
+        assertEquals(bottomY, locked.lineClearShiftBlocks.single().targetY)
+        assertNotEquals(locked.currentPiece, moved.currentPiece)
         assertFalse(finished.isClearingLines)
-        assertTrue(finished.board.cells.flatten().all { it == null })
-        assertNotNull(finished.currentPiece)
+        assertEquals(PieceType.T, finished.board.cells[bottomY][0])
+        assertEquals(locked.currentPiece, finished.currentPiece)
     }
 
     @Test
@@ -175,6 +193,69 @@ class ExampleUnitTest {
         assertEquals(GameConstants.BOARD_WIDTH - 1, bottomRow.count { it == PieceType.Garbage })
         assertFalse(next.isGameOver)
         assertTrue(next.attackObjects.isEmpty())
+    }
+
+    @Test
+    fun hapticGateLetsImportantEventsPreemptInputAndBlocksInputDuringThem() {
+        val gate = HapticPulseGate()
+
+        assertTrue(gate.tryAcquire(GameHapticEvent.Input, nowMs = 1_000L))
+        assertTrue(gate.tryAcquire(GameHapticEvent.HardDrop, nowMs = 1_001L))
+        assertTrue(gate.tryAcquire(GameHapticEvent.LineClear, nowMs = 1_002L))
+        assertFalse(gate.tryAcquire(GameHapticEvent.Input, nowMs = 1_010L))
+    }
+
+    @Test
+    fun hapticGateStillAppliesCooldownToRepeatedEvents() {
+        val gate = HapticPulseGate()
+
+        assertTrue(gate.tryAcquire(GameHapticEvent.Input, nowMs = 1_000L))
+        assertFalse(gate.tryAcquire(GameHapticEvent.Input, nowMs = 1_020L))
+        assertTrue(gate.tryAcquire(GameHapticEvent.Input, nowMs = 1_030L))
+    }
+
+    @Test
+    fun gameSessionRestoresActiveGameAndPausesItSafely() {
+        val handle = SavedStateHandle()
+        val original = GameSessionViewModel(handle)
+        original.appMode = AppMode.SurvivalGame
+        original.game = stateWithPiece(
+            piece = Piece(PieceType.T, rotation = 2, x = 4, y = 9),
+            queue = listOf(PieceType.I, PieceType.J, PieceType.L, PieceType.S, PieceType.Z)
+        ).copy(score = 1_200, lines = 17, level = 2)
+        original.timeRemainingMs = 75_000L
+        original.selectedTimeDuration = TimeLeaderboardDuration.TwoMinutes
+        original.pendingSurvivalAttacks = listOf(SurvivalAttackKind.FallingGarbage)
+        original.persistUiState()
+
+        val restored = GameSessionViewModel(handle)
+
+        assertEquals(AppMode.SurvivalGame, restored.appMode)
+        assertEquals(PieceType.T, restored.game.currentPiece?.type)
+        assertEquals(4, restored.game.currentPiece?.x)
+        assertEquals(9, restored.game.currentPiece?.y)
+        assertEquals(1_200, restored.game.score)
+        assertEquals(75_000L, restored.timeRemainingMs)
+        assertEquals(TimeLeaderboardDuration.TwoMinutes, restored.selectedTimeDuration)
+        assertEquals(listOf(SurvivalAttackKind.FallingGarbage), restored.pendingSurvivalAttacks)
+        assertTrue(restored.game.isPaused)
+        assertTrue(restored.showSettings)
+    }
+
+    @Test
+    fun scoreInsertionHighlightsTheNewEntryAfterExistingTies() {
+        val result = insertScore(existingScores = listOf(900, 700, 700, 500), score = 700)
+
+        assertEquals(listOf(900, 700, 700, 700, 500), result.scores)
+        assertEquals(4, result.insertedRank)
+    }
+
+    @Test
+    fun scoreOutsideTopTenDoesNotReceiveARank() {
+        val result = insertScore(existingScores = List(10) { 700 }, score = 700)
+
+        assertEquals(List(10) { 700 }, result.scores)
+        assertNull(result.insertedRank)
     }
 
     private fun groundedState(): GameState {

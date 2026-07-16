@@ -6,6 +6,13 @@ data class ClearingBlock(
     val type: PieceType
 )
 
+data class LineClearShiftBlock(
+    val x: Int,
+    val sourceY: Int,
+    val targetY: Int,
+    val type: PieceType
+)
+
 data class SurvivalAttackObject(
     val kind: SurvivalAttackKind,
     val x: Int,
@@ -28,8 +35,9 @@ data class GameState(
     val lastDropDistance: Int,
     val lockResetCount: Int = 0,
     val clearingBlocks: List<ClearingBlock> = emptyList(),
+    val lineClearShiftBlocks: List<LineClearShiftBlock> = emptyList(),
     val attackObjects: List<SurvivalAttackObject> = emptyList()
 ) {
     val isClearingLines: Boolean
-        get() = clearingBlocks.isNotEmpty()
+        get() = clearingBlocks.isNotEmpty() || lineClearShiftBlocks.isNotEmpty()
 }

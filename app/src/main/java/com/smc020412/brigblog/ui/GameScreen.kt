@@ -1,5 +1,8 @@
 package com.smc020412.brigblog.ui
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
@@ -48,10 +51,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.smc020412.brigblog.audio.GameAudioManager
 import com.smc020412.brigblog.audio.GameSoundEvent
 import com.smc020412.brigblog.data.ControlLayoutRepository
+import com.smc020412.brigblog.data.GameSettings
+import com.smc020412.brigblog.data.GameSettingsRepository
 import com.smc020412.brigblog.data.ScoreRepository
 import com.smc020412.brigblog.game.GameConstants
 import com.smc020412.brigblog.game.GameEngine
@@ -64,6 +70,8 @@ import kotlin.random.Random
 private const val SurvivalAttackWarningMs = 820L
 private const val SurvivalAttackStrikeMs = 430L
 private const val SurvivalThreatChargeMs = 5_000L
+private const val PrivacyPolicyUrl = "https://smc020412.github.io/gridream-policy/"
+private const val HardDropImpactDurationMs = 280L
 
 val LocalGameUiScale = androidx.compose.runtime.staticCompositionLocalOf { 1f }
 
@@ -80,47 +88,81 @@ fun scaledTextStyle(style: TextStyle): TextStyle {
 fun GameScreen() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val engine = remember { GameEngine() }
+    val activity = context as ComponentActivity
+    val session = remember(activity) { ViewModelProvider(activity)[GameSessionViewModel::class.java] }
+    val engine = session.engine
     val scoresRepository = remember(context) { ScoreRepository(context) }
     val controlLayoutRepository = remember(context) { ControlLayoutRepository(context) }
+    val settingsRepository = remember(context) { GameSettingsRepository(context) }
     val audio = remember(context) { GameAudioManager(context) }
     val haptic = remember(context) { GameHapticManager(context) }
+
+    fun openPrivacyPolicy() {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PrivacyPolicyUrl)))
+    }
 
     fun loadTimeScores(): Map<TimeLeaderboardDuration, List<Int>> =
         TimeLeaderboardDuration.values().associateWith { duration ->
             scoresRepository.getTimeScores(duration.seconds)
         }
 
-    var game by remember { mutableStateOf(engine.createGame()) }
+    var game by session::game
     var scores by remember { mutableStateOf(scoresRepository.getScores()) }
     var timeScores by remember { mutableStateOf(loadTimeScores()) }
     var survivalScores by remember { mutableStateOf(scoresRepository.getSurvivalScores()) }
-    var currentRank by remember { mutableStateOf<Int?>(null) }
-    var lockElapsed by remember { mutableLongStateOf(0L) }
-    var fallElapsed by remember { mutableLongStateOf(0L) }
-    var lineClearElapsed by remember { mutableLongStateOf(0L) }
-    var survivalThreatElapsed by remember { mutableLongStateOf(0L) }
-    var pendingSurvivalAttacks by remember { mutableStateOf<List<SurvivalAttackKind>>(emptyList()) }
-    var timeRemainingMs by remember { mutableLongStateOf(TimeLeaderboardDuration.NinetySeconds.durationMs) }
-    var showRestartConfirm by remember { mutableStateOf(false) }
-    var showMainMenuConfirm by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
-    var showMainMenuSettings by remember { mutableStateOf(false) }
-    var showMainMenuLeaderboard by remember { mutableStateOf(false) }
-    var showMainMenuTimeSetup by remember { mutableStateOf(false) }
-    var showControlsEditor by remember { mutableStateOf(false) }
-    var soundVolume by remember { mutableFloatStateOf(0.75f) }
-    var hapticEnabled by remember { mutableStateOf(true) }
-    var controlsEditMode by remember { mutableStateOf(false) }
+    var currentRank by session::currentRank
+    var lockElapsed by session::lockElapsed
+    var fallElapsed by session::fallElapsed
+    var lineClearElapsed by session::lineClearElapsed
+    var hardDropImpactElapsed by remember { mutableLongStateOf(0L) }
+    var hardDropImpact by remember { mutableStateOf<HardDropImpact?>(null) }
+    var survivalThreatElapsed by session::survivalThreatElapsed
+    var pendingSurvivalAttacks by session::pendingSurvivalAttacks
+    var timeRemainingMs by session::timeRemainingMs
+    var showRestartConfirm by session::showRestartConfirm
+    var showMainMenuConfirm by session::showMainMenuConfirm
+    var showSettings by session::showSettings
+    var showMainMenuSettings by session::showMainMenuSettings
+    var showMainMenuLeaderboard by session::showMainMenuLeaderboard
+    var showMainMenuTimeSetup by session::showMainMenuTimeSetup
+    var showControlsEditor by session::showControlsEditor
+    var soundVolume by session::soundVolume
+    var hapticEnabled by session::hapticEnabled
+    var controlsEditMode by session::controlsEditMode
     var controlPlacements by remember { mutableStateOf(controlLayoutRepository.load()) }
     var selectedControlAction by remember { mutableStateOf(DefaultControlLayout.placements.first().action) }
-    var appMode by remember { mutableStateOf(AppMode.MainMenu) }
+    var appMode by session::appMode
     var appInForeground by remember { mutableStateOf(true) }
-    var selectedTimeDuration by remember { mutableStateOf(TimeLeaderboardDuration.NinetySeconds) }
-    var timeOver by remember { mutableStateOf(false) }
+    var selectedTimeDuration by session::selectedTimeDuration
+    var timeOver by session::timeOver
 
     audio.setVolume(soundVolume)
     haptic.enabled = hapticEnabled
+
+    LaunchedEffect(session, settingsRepository) {
+        if (!session.persistentSettingsLoaded) {
+            val settings = settingsRepository.load()
+            session.soundVolume = settings.soundVolume
+            session.hapticEnabled = settings.hapticEnabled
+            session.persistentSettingsLoaded = true
+        }
+    }
+
+    LaunchedEffect(soundVolume, hapticEnabled, session.persistentSettingsLoaded) {
+        if (session.persistentSettingsLoaded) {
+            settingsRepository.save(GameSettings(soundVolume, hapticEnabled))
+        }
+    }
+
+    LaunchedEffect(
+        currentRank, lockElapsed, fallElapsed, lineClearElapsed, survivalThreatElapsed,
+        pendingSurvivalAttacks, timeRemainingMs, showRestartConfirm, showMainMenuConfirm,
+        showSettings, showMainMenuSettings, showMainMenuLeaderboard, showMainMenuTimeSetup,
+        showControlsEditor, soundVolume, hapticEnabled, controlsEditMode, appMode,
+        selectedTimeDuration, timeOver
+    ) {
+        session.persistUiState()
+    }
 
     fun updateSoundVolume(value: Float) {
         val normalized = value.coerceIn(0f, 1f)
@@ -157,6 +199,35 @@ fun GameScreen() {
     fun isGameModeActive(): Boolean =
         appMode == AppMode.ClassicGame || appMode == AppMode.TimeGame || appMode == AppMode.SurvivalGame
 
+    fun survivalThreatClearRequirement(level: Int): Int {
+        val maxSpeedLevel = ((GameConstants.INITIAL_GRAVITY_MS - GameConstants.MIN_GRAVITY_MS) +
+            GameConstants.GRAVITY_STEP_MS - 1) / GameConstants.GRAVITY_STEP_MS + 1
+        return level.coerceIn(1, maxSpeedLevel.toInt())
+    }
+
+    fun finishGame(completedGame: GameState) {
+        when (appMode) {
+            AppMode.TimeGame -> {
+                val saveResult = scoresRepository.saveTimeScore(selectedTimeDuration.seconds, completedGame.score)
+                timeScores = timeScores.toMutableMap().apply {
+                    put(selectedTimeDuration, saveResult.scores)
+                }
+                currentRank = saveResult.insertedRank
+            }
+            AppMode.SurvivalGame -> {
+                val saveResult = scoresRepository.saveSurvivalScore(completedGame.score)
+                survivalScores = saveResult.scores
+                currentRank = saveResult.insertedRank
+            }
+            AppMode.ClassicGame -> {
+                val saveResult = scoresRepository.saveScore(completedGame.score)
+                scores = saveResult.scores
+                currentRank = saveResult.insertedRank
+            }
+            AppMode.MainMenu -> Unit
+        }
+    }
+
     fun applyState(next: GameState, sound: GameSoundEvent? = null, pulse: GameHapticEvent? = null) {
         val previous = game
         game = next
@@ -164,22 +235,32 @@ fun GameScreen() {
         if (sound != null && next != previous) audio.play(sound)
         if (pulse != null && next != previous) haptic.pulse(pulse)
 
-        if (next.lastClearedRows.isNotEmpty()) {
+        val clearedLineCount = (next.lines - previous.lines).coerceAtLeast(0)
+        if (clearedLineCount > 0) {
             audio.play(GameSoundEvent.LineClear)
             haptic.pulse(GameHapticEvent.LineClear)
+            lineClearElapsed = 0L
+            if (appMode == AppMode.SurvivalGame) {
+                val clearRequirement = survivalThreatClearRequirement(next.level)
+                val threatDrain = SurvivalThreatChargeMs * clearedLineCount / clearRequirement
+                survivalThreatElapsed = (survivalThreatElapsed - threatDrain).coerceAtLeast(0L)
+            }
         }
         if (next.isGameOver && !previous.isGameOver) {
+            finishGame(next)
             audio.play(GameSoundEvent.GameOver)
             haptic.pulse(GameHapticEvent.GameOver)
         }
     }
 
-    fun resetGame() {
+    fun resetGameSession() {
         game = engine.createGame()
         currentRank = null
         lockElapsed = 0L
         fallElapsed = 0L
         lineClearElapsed = 0L
+        hardDropImpactElapsed = 0L
+        hardDropImpact = null
         survivalThreatElapsed = 0L
         pendingSurvivalAttacks = emptyList()
         timeRemainingMs = selectedTimeDuration.durationMs
@@ -195,6 +276,16 @@ fun GameScreen() {
         selectedControlAction = DefaultControlLayout.placements.first().action
     }
 
+    fun abandonGame() {
+        // Incomplete games intentionally never enter a leaderboard.
+        resetGameSession()
+    }
+
+    fun restartGame() {
+        // Completed games were already persisted by finishGame().
+        resetGameSession()
+    }
+
     fun playerAction(
         sound: GameSoundEvent,
         pulse: GameHapticEvent = GameHapticEvent.Input,
@@ -207,6 +298,25 @@ fun GameScreen() {
             }
             applyState(next, sound, pulse)
         }
+    }
+
+    fun hardDrop() {
+        val landedPiece = engine.ghostPiece(game) ?: return
+        val next = engine.hardDrop(game)
+        if (next == game) return
+
+        hardDropImpact = HardDropImpact(
+            blocks = engine.getCells(landedPiece)
+                .filter { it.y >= 0 }
+                .map { block ->
+                    HardDropImpactBlock(x = block.x, y = block.y, type = landedPiece.type)
+                }
+        )
+        hardDropImpactElapsed = 0L
+        if (next.lockResetCount > game.lockResetCount || !engine.isGrounded(next)) {
+            lockElapsed = 0L
+        }
+        applyState(next, GameSoundEvent.HardDrop, GameHapticEvent.HardDrop)
     }
 
     fun uiAction(sound: GameSoundEvent = GameSoundEvent.Menu, action: () -> Unit) {
@@ -230,50 +340,24 @@ fun GameScreen() {
     fun randomSurvivalAttack(): SurvivalAttackKind =
         if (Random.nextBoolean()) SurvivalAttackKind.RisingGarbage else SurvivalAttackKind.FallingGarbage
 
-    fun survivalThreatClearRequirement(level: Int): Int {
-        val maxSpeedLevel = ((GameConstants.INITIAL_GRAVITY_MS - GameConstants.MIN_GRAVITY_MS) +
-            GameConstants.GRAVITY_STEP_MS - 1) / GameConstants.GRAVITY_STEP_MS + 1
-        return level.coerceIn(1, maxSpeedLevel.toInt())
-    }
-
-    LaunchedEffect(game.isGameOver) {
-        if (game.isGameOver) {
-            if (appMode == AppMode.TimeGame) {
-                val updatedScores = scoresRepository.saveTimeScore(selectedTimeDuration.seconds, game.score)
-                timeScores = timeScores.toMutableMap().apply {
-                    put(selectedTimeDuration, updatedScores)
-                }
-                currentRank = updatedScores.indexOf(game.score).takeIf { it >= 0 }?.plus(1)
-            } else if (appMode == AppMode.SurvivalGame) {
-                val updatedScores = scoresRepository.saveSurvivalScore(game.score)
-                survivalScores = updatedScores
-                currentRank = updatedScores.indexOf(game.score).takeIf { it >= 0 }?.plus(1)
-            } else {
-                val updatedScores = scoresRepository.saveScore(game.score)
-                scores = updatedScores
-                currentRank = updatedScores.indexOf(game.score).takeIf { it >= 0 }?.plus(1)
-            }
-        }
-    }
-
     fun goToMainMenu() {
-        resetGame()
+        abandonGame()
         appMode = AppMode.MainMenu
     }
 
     fun startClassicGame() {
-        resetGame()
+        restartGame()
         appMode = AppMode.ClassicGame
     }
 
     fun startSurvivalGame() {
-        resetGame()
+        restartGame()
         appMode = AppMode.SurvivalGame
     }
 
     fun startTimeGame(duration: TimeLeaderboardDuration) {
         selectedTimeDuration = duration
-        resetGame()
+        restartGame()
         timeRemainingMs = duration.durationMs
         appMode = AppMode.TimeGame
     }
@@ -281,6 +365,7 @@ fun GameScreen() {
     LaunchedEffect(appInForeground) {
         if (!appInForeground && isGameModeActive() && !game.isPaused && !game.isGameOver) {
             game = game.copy(isPaused = true)
+            showSettings = true
         }
     }
 
@@ -338,6 +423,14 @@ fun GameScreen() {
             val delta = (frame - lastFrame).coerceAtMost(80L)
             lastFrame = frame
 
+            if (hardDropImpact != null) {
+                hardDropImpactElapsed += delta
+                if (hardDropImpactElapsed >= HardDropImpactDurationMs) {
+                    hardDropImpactElapsed = 0L
+                    hardDropImpact = null
+                }
+            }
+
             val gameModeActive = appMode == AppMode.ClassicGame || appMode == AppMode.TimeGame || appMode == AppMode.SurvivalGame
             if (gameModeActive && !game.isPaused && !game.isGameOver && !showSettings && !showRestartConfirm && !showMainMenuConfirm && !showControlsEditor) {
                 if (appMode == AppMode.TimeGame) {
@@ -350,22 +443,13 @@ fun GameScreen() {
                 }
 
                 if (game.isClearingLines) {
-                    fallElapsed = 0L
-                    lockElapsed = 0L
                     lineClearElapsed += delta
                     if (lineClearElapsed >= GameConstants.LINE_CLEAR_ANIMATION_MS) {
                         lineClearElapsed = 0L
-                        if (appMode == AppMode.SurvivalGame) {
-                            val clearedLineCount = game.lastClearedRows.size
-                            val clearRequirement = survivalThreatClearRequirement(game.level)
-                            val threatDrain = SurvivalThreatChargeMs * clearedLineCount / clearRequirement
-                            survivalThreatElapsed = (survivalThreatElapsed - threatDrain).coerceAtLeast(0L)
-                            applyState(engine.finishLineClear(game))
-                        } else {
-                            applyState(engine.finishLineClear(game))
-                        }
+                        applyState(engine.finishLineClear(game))
                     }
-                    continue
+                } else {
+                    lineClearElapsed = 0L
                 }
 
                 if (appMode == AppMode.SurvivalGame && game.attackObjects.isNotEmpty()) {
@@ -475,6 +559,7 @@ fun GameScreen() {
                     },
                     onVolumeChange = ::updateSoundVolume,
                     onHapticToggle = { uiAction { hapticEnabled = !hapticEnabled } },
+                    onPrivacyPolicy = { uiAction { openPrivacyPolicy() } },
                     onCloseSettings = { uiAction { showMainMenuSettings = false } },
                     onCloseLeaderboard = { uiAction { showMainMenuLeaderboard = false } },
                     onCloseTimeSetup = { uiAction { showMainMenuTimeSetup = false } },
@@ -483,11 +568,18 @@ fun GameScreen() {
                 return@BoxWithConstraints
             }
 
-            val compact = maxWidth < 620.dp
+            // Foldables remain touch-first layouts even when unfolded; reserve the side layout for genuinely wide screens.
+            val useWideLayout = maxWidth >= 900.dp && maxWidth > maxHeight
+            val compact = !useWideLayout
             val panelActive = game.isPaused || game.isGameOver || showSettings || showRestartConfirm || showMainMenuConfirm || showControlsEditor
-            val inputLocked = panelActive || game.isClearingLines || controlsEditMode
+            val inputLocked = panelActive || controlsEditMode
             val lineClearProgress = if (game.isClearingLines) {
                 (lineClearElapsed / GameConstants.LINE_CLEAR_ANIMATION_MS.toFloat()).coerceIn(0f, 1f)
+            } else {
+                1f
+            }
+            val hardDropImpactProgress = if (hardDropImpact != null) {
+                (hardDropImpactElapsed / HardDropImpactDurationMs.toFloat()).coerceIn(0f, 1f)
             } else {
                 1f
             }
@@ -504,7 +596,7 @@ fun GameScreen() {
                     onMoveLeft = { if (!inputLocked) playerAction(GameSoundEvent.Move, GameHapticEvent.Input) { engine.move(it, -1, 0) } },
                     onMoveRight = { if (!inputLocked) playerAction(GameSoundEvent.Move, GameHapticEvent.Input) { engine.move(it, 1, 0) } },
                     onSoftDrop = { if (!inputLocked) playerAction(GameSoundEvent.SoftDrop, GameHapticEvent.SoftDrop) { engine.softDrop(it) } },
-                    onHardDrop = { if (!inputLocked) playerAction(GameSoundEvent.HardDrop, GameHapticEvent.HardDrop) { engine.hardDrop(it) } },
+                    onHardDrop = { if (!inputLocked) hardDrop() },
                     onRotateLeft = { if (!inputLocked) playerAction(GameSoundEvent.Rotate, GameHapticEvent.Rotate) { engine.rotate(it, -1) } },
                     onRotateRight = { if (!inputLocked) playerAction(GameSoundEvent.Rotate, GameHapticEvent.Rotate) { engine.rotate(it, 1) } },
                     onHold = { if (!inputLocked) playerAction(GameSoundEvent.Hold, GameHapticEvent.Hold) { engine.hold(it) } },
@@ -556,6 +648,8 @@ fun GameScreen() {
                     controlPlacements = controlPlacements,
                     selectedControlAction = selectedControlAction,
                     lineClearProgress = lineClearProgress,
+                    hardDropImpact = hardDropImpact,
+                    hardDropImpactProgress = hardDropImpactProgress,
                     noiseTimeMs = fallElapsed + lockElapsed + lineClearElapsed,
                     onResume = {
                         uiAction {
@@ -569,7 +663,7 @@ fun GameScreen() {
                             showRestartConfirm = true
                         }
                     },
-                    onRestartConfirm = { uiAction(GameSoundEvent.Start) { resetGame() } },
+                    onRestartConfirm = { uiAction(GameSoundEvent.Start) { restartGame() } },
                     onRestartDismiss = {
                         uiAction {
                             showRestartConfirm = false
@@ -674,44 +768,6 @@ fun GameScreen() {
     }
 }
 
-private enum class AppMode {
-    MainMenu,
-    ClassicGame,
-    TimeGame,
-    SurvivalGame
-}
-
-private enum class LeaderboardCategory {
-    Classic,
-    Time,
-    Survival
-}
-
-private enum class TimeLeaderboardDuration(val label: String, val seconds: Int) {
-    ThirtySeconds("0:30", 30),
-    OneMinute("1:00", 60),
-    NinetySeconds("1:30", 90),
-    TwoMinutes("2:00", 120),
-    TwoAndHalfMinutes("2:30", 150),
-    ThreeMinutes("3:00", 180);
-
-    val durationMs: Long
-        get() = seconds * 1_000L
-}
-
-private fun GameSoundEvent.toHapticEvent(): GameHapticEvent =
-    when (this) {
-        GameSoundEvent.Move -> GameHapticEvent.Input
-        GameSoundEvent.Rotate -> GameHapticEvent.Rotate
-        GameSoundEvent.SoftDrop -> GameHapticEvent.SoftDrop
-        GameSoundEvent.HardDrop -> GameHapticEvent.HardDrop
-        GameSoundEvent.Hold -> GameHapticEvent.Hold
-        GameSoundEvent.Start -> GameHapticEvent.Start
-        GameSoundEvent.LineClear -> GameHapticEvent.LineClear
-        GameSoundEvent.GameOver -> GameHapticEvent.GameOver
-        GameSoundEvent.Menu -> GameHapticEvent.Menu
-    }
-
 @Composable
 private fun MainMenuScreen(
     showSettings: Boolean,
@@ -730,6 +786,7 @@ private fun MainMenuScreen(
     onSetting: () -> Unit,
     onVolumeChange: (Float) -> Unit,
     onHapticToggle: () -> Unit,
+    onPrivacyPolicy: () -> Unit,
     onCloseSettings: () -> Unit,
     onCloseLeaderboard: () -> Unit,
     onCloseTimeSetup: () -> Unit,
@@ -749,8 +806,8 @@ private fun MainMenuScreen(
 
     BoxWithConstraints(modifier = modifier) {
         val widthScale = (maxWidth.value / 420f).coerceIn(0.78f, 1f)
-        val heightScale = (maxHeight.value / 860f).coerceIn(0.74f, 1f)
-        val menuScale = minOf(widthScale, heightScale).coerceIn(0.74f, 1f)
+        val heightScale = (maxHeight.value / 920f).coerceIn(0.62f, 1f)
+        val menuScale = minOf(widthScale, heightScale).coerceIn(0.62f, 1f)
 
         CompositionLocalProvider(LocalGameUiScale provides menuScale) {
             Box(
@@ -777,9 +834,9 @@ private fun MainMenuScreen(
                             .height(scaledDp(76f))
                     )
                     Spacer(Modifier.height(scaledDp(10f)))
-                    MainMenuButton("Classic", onClick = onClassic)
-                    MainMenuButton("Time", onClick = onTime)
                     MainMenuButton("Survival", onClick = onSurvival)
+                    MainMenuButton("Time", onClick = onTime)
+                    MainMenuButton("Classic", onClick = onClassic)
                     MainMenuButton("Leaderboard", onClick = onLeaderboard)
                     MainMenuButton("Setting", onClick = onSetting)
                 }
@@ -808,6 +865,7 @@ private fun MainMenuScreen(
                         hapticEnabled = hapticEnabled,
                         onVolumeChange = onVolumeChange,
                         onHapticToggle = onHapticToggle,
+                        onPrivacyPolicy = onPrivacyPolicy,
                         onClose = onCloseSettings,
                         modifier = Modifier.align(Alignment.Center)
                     )
@@ -1144,6 +1202,7 @@ private fun MainMenuSettingsPanel(
     hapticEnabled: Boolean,
     onVolumeChange: (Float) -> Unit,
     onHapticToggle: () -> Unit,
+    onPrivacyPolicy: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1171,6 +1230,7 @@ private fun MainMenuSettingsPanel(
             Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
                 Text("Close", style = scaledTextStyle(MaterialTheme.typography.labelSmall))
             }
+            PrivacyPolicyLink(onClick = onPrivacyPolicy)
         }
     }
 }
@@ -1277,6 +1337,8 @@ private fun BoardStage(
     controlPlacements: List<ControlPlacement>,
     selectedControlAction: ControlAction,
     lineClearProgress: Float,
+    hardDropImpact: HardDropImpact?,
+    hardDropImpactProgress: Float,
     noiseTimeMs: Long,
     onResume: () -> Unit,
     onRestartRequest: () -> Unit,
@@ -1307,6 +1369,8 @@ private fun BoardStage(
                 timeRemainingMs = timeRemainingMs,
                 timeTotalMs = timeTotalMs,
                 lineClearProgress = lineClearProgress,
+                hardDropImpact = hardDropImpact,
+                hardDropImpactProgress = hardDropImpactProgress,
                 noiseTimeMs = noiseTimeMs,
                 modifier = Modifier.fillMaxSize()
             )
@@ -1315,6 +1379,8 @@ private fun BoardStage(
                 engine = engine,
                 threatRatio = survivalThreatRatio,
                 lineClearProgress = lineClearProgress,
+                hardDropImpact = hardDropImpact,
+                hardDropImpactProgress = hardDropImpactProgress,
                 noiseTimeMs = noiseTimeMs,
                 modifier = Modifier.fillMaxSize()
             )
@@ -1322,6 +1388,8 @@ private fun BoardStage(
                 state = game,
                 engine = engine,
                 lineClearProgress = lineClearProgress,
+                hardDropImpact = hardDropImpact,
+                hardDropImpactProgress = hardDropImpactProgress,
                 noiseTimeMs = noiseTimeMs,
                 modifier = Modifier.fillMaxSize()
             )
@@ -1379,6 +1447,8 @@ private fun SurvivalBoardFrame(
     engine: GameEngine,
     threatRatio: Float,
     lineClearProgress: Float,
+    hardDropImpact: HardDropImpact?,
+    hardDropImpactProgress: Float,
     noiseTimeMs: Long,
     modifier: Modifier = Modifier
 ) {
@@ -1392,6 +1462,8 @@ private fun SurvivalBoardFrame(
             state = game,
             engine = engine,
             lineClearProgress = lineClearProgress,
+            hardDropImpact = hardDropImpact,
+            hardDropImpactProgress = hardDropImpactProgress,
             noiseTimeMs = noiseTimeMs,
             modifier = Modifier
                 .weight(1f)
@@ -1408,6 +1480,8 @@ private fun TimeBoardFrame(
     timeRemainingMs: Long,
     timeTotalMs: Long,
     lineClearProgress: Float,
+    hardDropImpact: HardDropImpact?,
+    hardDropImpactProgress: Float,
     noiseTimeMs: Long,
     modifier: Modifier = Modifier
 ) {
@@ -1442,6 +1516,8 @@ private fun TimeBoardFrame(
                 state = game,
                 engine = engine,
                 lineClearProgress = lineClearProgress,
+                hardDropImpact = hardDropImpact,
+                hardDropImpactProgress = hardDropImpactProgress,
                 noiseTimeMs = noiseTimeMs,
                 modifier = Modifier
                     .weight(1f)
@@ -1523,20 +1599,20 @@ private fun CompactGameLayout(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val sidePanelWidth = (maxWidth * 0.27f).coerceIn(88.dp, 118.dp)
         val widthScale = sidePanelWidth.value / 118f
-        val heightScale = (maxHeight.value / 760f).coerceIn(0.76f, 1f)
-        val hudScale = minOf(widthScale, heightScale).coerceIn(0.72f, 1f)
+        val heightScale = (maxHeight.value / 900f).coerceIn(0.60f, 1f)
+        val hudScale = minOf(widthScale, heightScale).coerceIn(0.60f, 1f)
         val panelCompact = hudScale < 0.92f
 
         CompositionLocalProvider(LocalGameUiScale provides hudScale) {
             Column(
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(scaledDp(8f))
+                verticalArrangement = Arrangement.spacedBy(scaledDp(0f))
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(2.58f)
-                        .padding(bottom = scaledDp(4f)),
+                        .weight(2.34f)
+                        .padding(bottom = scaledDp(0f)),
                     horizontalArrangement = Arrangement.spacedBy(scaledDp(8f)),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1544,7 +1620,7 @@ private fun CompactGameLayout(
                         Modifier
                             .weight(1f)
                             .padding(top = scaledDp(10f))
-                            .fillMaxHeight(0.89f)
+                            .fillMaxHeight(0.93f)
                     )
                     SidePanel(
                         game = game,
@@ -1562,7 +1638,8 @@ private fun CompactGameLayout(
                 controls(
                     Modifier
                         .fillMaxWidth()
-                        .weight(1.04f)
+                        .weight(1.26f)
+                        .padding(top = scaledDp(0f), bottom = scaledDp(4f))
                 )
             }
         }
@@ -1622,8 +1699,8 @@ private fun SidePanel(
     onSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val safeScale = scale.coerceIn(0.72f, 1f)
-    val miniHeightDp = (42f * safeScale).toInt().coerceIn(30, 42)
+    val safeScale = scale.coerceIn(0.60f, 1f)
+    val miniHeightDp = (42f * safeScale).toInt().coerceIn(24, 42)
     val removedMenuHeightDp = 40f * safeScale
     val pauseHeightDp = 40f * safeScale
     val gap = if (compact) (5f * safeScale).dp else (6f * safeScale).dp
@@ -1634,6 +1711,7 @@ private fun SidePanel(
         verticalArrangement = Arrangement.spacedBy(gap)
     ) {
         Spacer(Modifier.height(topReserveHeightDp.dp))
+        StatsPanel(game, bestScore, compact = true)
         HoldPreview(
             pieceType = game.heldPiece,
             enabled = game.canHold,
@@ -1646,7 +1724,6 @@ private fun SidePanel(
             miniHeightDp = miniHeightDp,
             compact = compact
         )
-        StatsPanel(game, bestScore, compact = true)
         Button(
             onClick = onSettings,
             modifier = Modifier
@@ -1686,36 +1763,85 @@ private fun StatsPanel(
     compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val panelColor = Color(0xFF2A2315)
+    val scoreColor = GameColors.Warning
+    val scoreStyle = scaledTextStyle(if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineSmall)
+    val labelStyle = scaledTextStyle(if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium)
+    val statStyle = scaledTextStyle(if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodySmall)
+
     Surface(
-        color = GameColors.Panel,
+        color = panelColor,
         contentColor = GameColors.Text,
         shape = MaterialTheme.shapes.small,
+        border = BorderStroke(scaledDp(1f), scoreColor.copy(alpha = 0.40f)),
         modifier = modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(if (compact) scaledDp(6f) else scaledDp(10f)),
-            verticalArrangement = Arrangement.spacedBy(if (compact) scaledDp(2f) else scaledDp(6f))
+            modifier = Modifier.padding(if (compact) scaledDp(7f) else scaledDp(11f)),
+            verticalArrangement = Arrangement.spacedBy(if (compact) scaledDp(4f) else scaledDp(7f))
         ) {
-            StatLine("Score", game.score, compact)
-            StatLine("Best", bestScore, compact)
-            StatLine("Lines", game.lines, compact)
-            StatLine("Level", game.level, compact)
+            Text(
+                text = "SCORE",
+                color = scoreColor,
+                style = labelStyle,
+                fontWeight = FontWeight.Black,
+                maxLines = 1
+            )
+            Text(
+                text = game.score.toString().padStart(6, '0'),
+                color = GameColors.Text,
+                style = scoreStyle,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Black,
+                maxLines = 1
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("BEST", color = GameColors.MutedText, style = statStyle, maxLines = 1)
+                Text(
+                    bestScore.toString().padStart(6, '0'),
+                    color = scoreColor.copy(alpha = 0.92f),
+                    style = statStyle,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(scaledDp(1f))
+                    .background(scoreColor.copy(alpha = 0.22f))
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                CompactStat(label = "LN", value = game.lines, style = statStyle)
+                CompactStat(label = "LV", value = game.level, style = statStyle)
+            }
         }
     }
 }
 
 @Composable
-private fun StatLine(label: String, value: Int, compact: Boolean = false) {
+private fun CompactStat(
+    label: String,
+    value: Int,
+    style: TextStyle
+) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.spacedBy(scaledDp(4f))
     ) {
-        val textStyle = scaledTextStyle(if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium)
-        Text(label, color = GameColors.MutedText, style = textStyle, maxLines = 1)
+        Text(label, color = GameColors.MutedText, style = style, maxLines = 1)
         Text(
-            value.toString(),
-            fontWeight = FontWeight.Bold,
-            style = textStyle,
+            value.toString().padStart(2, '0'),
+            color = GameColors.Text,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Black,
+            style = style,
             maxLines = 1
         )
     }

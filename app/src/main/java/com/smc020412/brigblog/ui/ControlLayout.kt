@@ -14,24 +14,34 @@ data class ControlPlacement(
     val action: ControlAction,
     val xRatio: Float,
     val yRatio: Float,
-    val sizeDp: Float
+    val sizeDp: Float,
+    val widthScale: Float = 1f,
+    val heightScale: Float = 1f
 )
 
 object DefaultControlLayout {
+    private const val DefaultButtonSizeDp = 75f
+
     val placements: List<ControlPlacement> = listOf(
-        ControlPlacement(ControlAction.MoveLeft, xRatio = 0.12f, yRatio = 0.45f, sizeDp = 62f),
-        ControlPlacement(ControlAction.MoveRight, xRatio = 0.34f, yRatio = 0.45f, sizeDp = 62f),
-        ControlPlacement(ControlAction.HardDrop, xRatio = 0.57f, yRatio = 0.11f, sizeDp = 62f),
-        ControlPlacement(ControlAction.SoftDrop, xRatio = 0.57f, yRatio = 0.45f, sizeDp = 62f),
-        ControlPlacement(ControlAction.Hold, xRatio = 0.82f, yRatio = 0.11f, sizeDp = 62f),
-        ControlPlacement(ControlAction.RotateRight, xRatio = 0.82f, yRatio = 0.45f, sizeDp = 62f),
-        ControlPlacement(ControlAction.RotateLeft, xRatio = 0.70f, yRatio = 0.79f, sizeDp = 62f)
+        ControlPlacement(ControlAction.MoveLeft, xRatio = 0.16f, yRatio = 0.45f, sizeDp = DefaultButtonSizeDp, heightScale = 1.5f),
+        ControlPlacement(ControlAction.MoveRight, xRatio = 0.38f, yRatio = 0.45f, sizeDp = DefaultButtonSizeDp, heightScale = 1.5f),
+        ControlPlacement(ControlAction.HardDrop, xRatio = 0.61f, yRatio = 0.18f, sizeDp = DefaultButtonSizeDp),
+        ControlPlacement(ControlAction.SoftDrop, xRatio = 0.61f, yRatio = 0.45f, sizeDp = DefaultButtonSizeDp),
+        ControlPlacement(ControlAction.Hold, xRatio = 0.86f, yRatio = 0.18f, sizeDp = DefaultButtonSizeDp),
+        ControlPlacement(ControlAction.RotateRight, xRatio = 0.86f, yRatio = 0.45f, sizeDp = DefaultButtonSizeDp),
+        ControlPlacement(ControlAction.RotateLeft, xRatio = 0.74f, yRatio = 0.72f, sizeDp = DefaultButtonSizeDp)
     )
 
     fun normalized(placements: List<ControlPlacement>): List<ControlPlacement> {
         val byAction = placements.associateBy { it.action }
         return this.placements.map { default ->
-            byAction[default.action] ?: default
+            byAction[default.action]?.let { saved ->
+                default.copy(
+                    xRatio = saved.xRatio,
+                    yRatio = saved.yRatio,
+                    sizeDp = saved.sizeDp
+                )
+            } ?: default
         }
     }
 }

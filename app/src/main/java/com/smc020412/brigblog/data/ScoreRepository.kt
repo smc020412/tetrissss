@@ -2,6 +2,11 @@ package com.smc020412.brigblog.data
 
 import android.content.Context
 
+data class ScoreSaveResult(
+    val scores: List<Int>,
+    val insertedRank: Int?
+)
+
 class ScoreRepository(
     context: Context
 ) {
@@ -18,52 +23,30 @@ class ScoreRepository(
     fun getBestScore(): Int =
         getScores().firstOrNull() ?: 0
 
-    fun saveScore(score: Int): List<Int> {
-        if (score <= 0) return getScores()
-
-        val scores = (getScores() + score)
-            .sortedDescending()
-            .take(MAX_SCORES)
-
-        preferences.edit()
-            .putString(KEY_SCORES, scores.joinToString(","))
-            .apply()
-
-        return scores
-    }
+    fun saveScore(score: Int): ScoreSaveResult =
+        saveScoreForKey(KEY_SCORES, score)
 
     fun getTimeScores(durationSeconds: Int): List<Int> =
         getScoresForKey(timeScoreKey(durationSeconds))
 
-    fun saveTimeScore(durationSeconds: Int, score: Int): List<Int> {
-        if (score <= 0) return getTimeScores(durationSeconds)
-
-        val scores = (getTimeScores(durationSeconds) + score)
-            .sortedDescending()
-            .take(MAX_SCORES)
-
-        preferences.edit()
-            .putString(timeScoreKey(durationSeconds), scores.joinToString(","))
-            .apply()
-
-        return scores
-    }
+    fun saveTimeScore(durationSeconds: Int, score: Int): ScoreSaveResult =
+        saveScoreForKey(timeScoreKey(durationSeconds), score)
 
     fun getSurvivalScores(): List<Int> =
         getScoresForKey(KEY_SURVIVAL_SCORES)
 
-    fun saveSurvivalScore(score: Int): List<Int> {
-        if (score <= 0) return getSurvivalScores()
+    fun saveSurvivalScore(score: Int): ScoreSaveResult =
+        saveScoreForKey(KEY_SURVIVAL_SCORES, score)
 
-        val scores = (getSurvivalScores() + score)
-            .sortedDescending()
-            .take(MAX_SCORES)
+    private fun saveScoreForKey(key: String, score: Int): ScoreSaveResult {
+        val existingScores = getScoresForKey(key)
+        if (score <= 0) return ScoreSaveResult(existingScores, insertedRank = null)
 
+        val result = insertScore(existingScores, score)
         preferences.edit()
-            .putString(KEY_SURVIVAL_SCORES, scores.joinToString(","))
+            .putString(key, result.scores.joinToString(","))
             .apply()
-
-        return scores
+        return result
     }
 
     private fun getScoresForKey(key: String): List<Int> =
@@ -82,4 +65,20 @@ class ScoreRepository(
         private fun timeScoreKey(durationSeconds: Int): String =
             "time_scores_$durationSeconds"
     }
+}
+
+internal fun insertScore(existingScores: List<Int>, score: Int): ScoreSaveResult {
+    data class RankedScore(val value: Int, val isNew: Boolean)
+
+    val rankedScores = (existingScores.map { RankedScore(it, isNew = false) } +
+        RankedScore(score, isNew = true))
+        .sortedByDescending { it.value }
+        .take(ScoreRepository.MAX_SCORES)
+
+    return ScoreSaveResult(
+        scores = rankedScores.map { it.value },
+        insertedRank = rankedScores.indexOfFirst { it.isNew }
+            .takeIf { it >= 0 }
+            ?.plus(1)
+    )
 }

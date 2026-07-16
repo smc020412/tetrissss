@@ -3,9 +3,6 @@ package com.smc020412.brigblog.game
 import kotlin.math.max
 import kotlin.random.Random
 
-private const val FallingAttackCellsPerSecond = 18f
-private const val RisingAttackCellsPerSecond = 8f
-
 class GameEngine(
     private val random: Random = Random.Default
 ) {
@@ -25,6 +22,7 @@ class GameEngine(
     private val iKicks = listOf(
         Cell(0, 0), Cell(-2, 0), Cell(1, 0), Cell(-1, 0), Cell(2, 0), Cell(0, -1), Cell(0, 1)
     )
+    private val survivalAttackEngine = SurvivalAttackEngine(random) { board, piece -> collides(board, piece) }
 
     fun createGame(): GameState {
         val board = createEmptyBoard()
@@ -120,7 +118,7 @@ class GameEngine(
             lastClearedRows = emptyList(),
             lastDropDistance = 0,
             lockResetCount = 0,
-            clearingBlocks = emptyList()
+            clearingBlocks = state.clearingBlocks
         )
     }
 
@@ -152,6 +150,23 @@ class GameEngine(
                 type?.let { ClearingBlock(x = x, y = y, type = it) }
             }
         }
+        val lineClearShiftBlocks = lockedBoard.cells.flatMapIndexed { y, row ->
+            val clearedBelow = clearedRows.count { clearedY -> clearedY > y }
+            if (clearedBelow == 0 || y in clearedRows) {
+                emptyList()
+            } else {
+                row.mapIndexedNotNull { x, type ->
+                    type?.let {
+                        LineClearShiftBlock(
+                            x = x,
+                            sourceY = y,
+                            targetY = y + clearedBelow,
+                            type = it
+                        )
+                    }
+                }
+            }
+        }
         val clearCount = clearedRows.size
         val dropScore = dropDistance * 2
 
@@ -174,117 +189,43 @@ class GameEngine(
         val newLevel = newLines / 10 + 1
         val clearScore = scoreByLines.getOrElse(clearCount) { 0 } * newLevel
 
-        return state.copy(
-            board = lockedBoard,
-            currentPiece = null,
-            score = state.score + clearScore + dropScore,
-            lines = newLines,
-            level = newLevel,
-            canHold = false,
+        val spawned = spawnPiece(
+            state.copy(
+                board = clearRows(lockedBoard).board,
+                currentPiece = null,
+                score = state.score + clearScore + dropScore,
+                lines = newLines,
+                level = newLevel,
+                lockResetCount = 0,
+                clearingBlocks = clearingBlocks,
+                lineClearShiftBlocks = lineClearShiftBlocks
+            )
+        )
+
+        return spawned.copy(
             lastClearedRows = clearedRows,
             lastDropDistance = dropDistance,
-            lockResetCount = 0,
-            clearingBlocks = clearingBlocks
+            clearingBlocks = clearingBlocks,
+            lineClearShiftBlocks = lineClearShiftBlocks
         )
     }
 
     fun finishLineClear(state: GameState): GameState {
         if (!state.isClearingLines) return state
 
-        val cleared = clearRows(state.board)
-        return spawnPiece(
-            state.copy(
-                board = cleared.board,
-                currentPiece = null,
-                lastClearedRows = emptyList(),
-                lastDropDistance = 0,
-                clearingBlocks = emptyList()
-            )
-        )
-    }
-
-    fun startSurvivalAttack(state: GameState, kind: SurvivalAttackKind): GameState {
-        if (state.isGameOver) return state
-
-        val nextObjects = when (kind) {
-            SurvivalAttackKind.RisingGarbage -> {
-                listOf(
-                    SurvivalAttackObject(
-                        kind = kind,
-                        x = 0,
-                        y = state.board.height.toFloat(),
-                        cells = createRisingGarbageCells(state.board.width)
-                    )
-                )
-            }
-            SurvivalAttackKind.FallingGarbage -> {
-                plannedFallingColumns(state.board.cells).mapIndexed { index, x ->
-                    SurvivalAttackObject(
-                        kind = kind,
-                        x = x,
-                        y = -1f - index * 0.42f
-                    )
-                }
-            }
-        }
-
-        return state.copy(attackObjects = state.attackObjects + nextObjects)
-    }
-
-    fun tickSurvivalAttacks(state: GameState, deltaMs: Long): GameState {
-        if (state.isGameOver || state.attackObjects.isEmpty()) return state
-
-        var boardCells = state.board.cells.map { it.toMutableList() }.toMutableList()
-        val nextObjects = mutableListOf<SurvivalAttackObject>()
-        var causedGameOver = false
-        val fallingStep = FallingAttackCellsPerSecond * deltaMs / 1000f
-        val risingStep = RisingAttackCellsPerSecond * deltaMs / 1000f
-
-        state.attackObjects.forEach { attackObject ->
-            when (attackObject.kind) {
-                SurvivalAttackKind.FallingGarbage -> {
-                    val x = attackObject.x.coerceIn(0, state.board.width - 1)
-                    val nextY = attackObject.y + fallingStep
-                    val landingY = safeFallingAttackY(boardCells, x)
-
-                    if (landingY == null) {
-                        causedGameOver = true
-                    } else if (nextY >= landingY) {
-                        boardCells[landingY][x] = PieceType.Garbage
-                    } else {
-                        nextObjects += attackObject.copy(x = x, y = nextY)
-                    }
-                }
-                SurvivalAttackKind.RisingGarbage -> {
-                    val nextY = attackObject.y - risingStep
-                    val targetY = state.board.height - 1f
-
-                    if (nextY <= targetY) {
-                        causedGameOver = causedGameOver || boardCells.firstOrNull()?.any { it != null } == true
-                        val row = attackObject.cells
-                            .take(state.board.width)
-                            .let { cells ->
-                                cells + List(state.board.width - cells.size) { false }
-                            }
-                            .map { filled -> if (filled) PieceType.Garbage else null }
-                        boardCells = (boardCells.drop(1) + listOf(row)).map { it.toMutableList() }.toMutableList()
-                    } else {
-                        nextObjects += attackObject.copy(y = nextY)
-                    }
-                }
-            }
-        }
-
-        val nextBoard = state.board.copy(cells = boardCells)
-        val resolvedPiece = pushCurrentPieceAboveBoardCollision(nextBoard, state.currentPiece)
-
         return state.copy(
-            board = nextBoard,
-            currentPiece = resolvedPiece,
-            isGameOver = state.isGameOver || causedGameOver,
-            attackObjects = nextObjects
+            lastClearedRows = emptyList(),
+            lastDropDistance = 0,
+            clearingBlocks = emptyList(),
+            lineClearShiftBlocks = emptyList()
         )
     }
+
+    fun startSurvivalAttack(state: GameState, kind: SurvivalAttackKind): GameState =
+        survivalAttackEngine.start(state, kind)
+
+    fun tickSurvivalAttacks(state: GameState, deltaMs: Long): GameState =
+        survivalAttackEngine.tick(state, deltaMs)
 
     fun isGrounded(state: GameState): Boolean =
         canAct(state) && tryMove(state, 0, 1) == null
@@ -364,7 +305,7 @@ class GameEngine(
     }
 
     private fun canAct(state: GameState): Boolean =
-        state.currentPiece != null && !state.isGameOver && !state.isPaused && !state.isClearingLines
+        state.currentPiece != null && !state.isGameOver && !state.isPaused
 
     private fun tryMove(state: GameState, dx: Int, dy: Int): Piece? {
         val current = state.currentPiece ?: return null
@@ -402,97 +343,6 @@ class GameEngine(
         )
     }
 
-    private fun pushCurrentPieceAboveBoardCollision(board: Board, currentPiece: Piece?): Piece? {
-        var candidate = currentPiece ?: return null
-
-        repeat(board.height + 4) {
-            if (!collides(board, candidate)) return candidate
-            candidate = candidate.copy(y = candidate.y - 1)
-        }
-
-        return candidate
-    }
-
-    private fun createRisingGarbageCells(width: Int): List<Boolean> {
-        val minFilledCount = 8.coerceAtMost(width - 1)
-        val maxFilledCount = (width - 1).coerceAtLeast(minFilledCount)
-        val filledCount = random.nextInt(minFilledCount, maxFilledCount + 1)
-        val filledColumns = (0 until width).shuffled(random).take(filledCount).toSet()
-        return List(width) { x -> x in filledColumns }
-    }
-
-private fun plannedFallingColumns(boardCells: List<List<PieceType?>>): List<Int> {
-    val width = boardCells.firstOrNull()?.size ?: return emptyList()
-    val columnCounts = mutableMapOf<Int, Int>()
-    val plannedBoard = boardCells.map { it.toMutableList() }.toMutableList()
-    return buildList {
-        repeat(6) {
-            val availableColumns = (0 until width).filter { x ->
-                (columnCounts[x] ?: 0) < 2 && canPlaceFallingAttack(plannedBoard, x)
-            }
-            if (availableColumns.isEmpty()) return@buildList
-            val x = availableColumns.random(random)
-            val y = safeFallingAttackY(plannedBoard, x) ?: return@buildList
-            plannedBoard[y][x] = PieceType.Garbage
-            columnCounts[x] = (columnCounts[x] ?: 0) + 1
-            add(x)
-        }
-    }
-}
-
-private fun canPlaceFallingAttack(
-    boardCells: List<List<PieceType?>>,
-    x: Int
-): Boolean {
-    val y = safeFallingAttackY(boardCells, x) ?: return false
-    return y in boardCells.indices &&
-        x in boardCells[y].indices &&
-        boardCells[y][x] == null
-}
-
-    private fun landingYForColumn(boardCells: List<List<PieceType?>>, x: Int): Int {
-        val topOccupiedY = boardCells.indices.firstOrNull { y ->
-            boardCells[y][x] != null
-        }
-        return if (topOccupiedY == null) {
-            boardCells.size - 1
-        } else {
-            topOccupiedY - 1
-        }
-    }
-
-private fun safeFallingAttackY(
-    boardCells: List<List<PieceType?>>,
-    x: Int
-): Int? {
-    val physicalLandingY = landingYForColumn(boardCells, x)
-    if (physicalLandingY !in boardCells.indices) return null
-
-    for (y in physicalLandingY downTo 0) {
-        if (x in boardCells[y].indices &&
-            boardCells[y][x] == null &&
-            !wouldCreateCompleteLine(boardCells, x, y)
-        ) {
-            return y
-        }
-    }
-
-    return null
-}
-
-private fun wouldCreateCompleteLine(
-    boardCells: List<List<PieceType?>>,
-    x: Int,
-    y: Int
-): Boolean {
-    if (y !in boardCells.indices) return false
-    val row = boardCells[y]
-    if (x !in row.indices || row[x] != null) return false
-    return row.indices.all { column ->
-        row[column] != null || column == x
-    }
-}
-
     private fun GameState.clearTransientEvents(): GameState =
         copy(lastClearedRows = emptyList(), lastDropDistance = 0)
 
@@ -503,9 +353,4 @@ private fun wouldCreateCompleteLine(
             .coerceAtMost(GameConstants.LOCK_RESET_LIMIT)
         return copy(lockResetCount = nextCount)
     }
-}
-
-enum class SurvivalAttackKind {
-    RisingGarbage,
-    FallingGarbage
 }

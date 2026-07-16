@@ -2,6 +2,7 @@ package com.smc020412.brigblog.haptic
 
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -19,24 +20,17 @@ class GameHapticManager(
         } else {
             @Suppress("DEPRECATION")
             context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-        }
+    }
 
     var enabled: Boolean = true
-    private var lastPulseAt = 0L
+    private val pulseGate = HapticPulseGate()
 
     fun pulse(event: GameHapticEvent) {
         if (!enabled || vibrator?.hasVibrator() != true) return
 
-        val now = System.currentTimeMillis()
-        if (event.cooldownMs > 0L && now - lastPulseAt < event.cooldownMs) return
-        lastPulseAt = now
+        if (!pulseGate.tryAcquire(event, SystemClock.elapsedRealtime())) return
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator.vibrate(event.effect())
-        } else {
-            @Suppress("DEPRECATION")
-            vibrator.vibrate(event.legacyDurationMs)
-        }
+        vibrator.vibrate(event.effect())
     }
 
     private fun GameHapticEvent.effect(): VibrationEffect =
@@ -85,16 +79,55 @@ class GameHapticManager(
 }
 
 enum class GameHapticEvent(
-    val legacyDurationMs: Long,
-    val cooldownMs: Long = 0L
+    val durationMs: Long,
+    val cooldownMs: Long = 0L,
+    val priority: Int
 ) {
-    Menu(10, 28),
-    Input(8, 28),
-    Rotate(12, 28),
-    SoftDrop(10, 28),
-    Hold(52, 40),
-    Start(110, 80),
-    HardDrop(52, 45),
-    LineClear(94, 80),
-    GameOver(216, 120)
+    Menu(10, 28, 1),
+    Input(8, 28, 1),
+    Rotate(12, 28, 1),
+    SoftDrop(10, 28, 1),
+    Hold(52, 40, 2),
+    Start(110, 80, 3),
+    HardDrop(52, 45, 3),
+    LineClear(94, 80, 4),
+    GameOver(216, 120, 5)
+}
+
+/**
+ * Keeps repeated low-priority input from replacing a stronger game-event haptic.
+ */
+internal class HapticPulseGate {
+    private val lastPulseByEvent = mutableMapOf<GameHapticEvent, Long>()
+    private var activePulse: ActivePulse? = null
+
+    fun tryAcquire(event: GameHapticEvent, nowMs: Long): Boolean {
+        val lastEventPulse = lastPulseByEvent[event]
+        if (lastEventPulse != null && nowMs - lastEventPulse < event.cooldownMs) {
+            return false
+        }
+
+        activePulse?.let { active ->
+            if (nowMs >= active.endsAtMs) {
+                activePulse = null
+            } else if (event.priority <= active.priority) {
+                return false
+            }
+        }
+
+        lastPulseByEvent[event] = nowMs
+        activePulse = ActivePulse(
+            priority = event.priority,
+            endsAtMs = nowMs + estimatedActiveDurationMs(event)
+        )
+        return true
+    }
+
+    private fun estimatedActiveDurationMs(event: GameHapticEvent): Long =
+        (event.durationMs * HapticDurationMultiplier).toLong().coerceAtLeast(event.durationMs)
+
+    private data class ActivePulse(
+        val priority: Int,
+        val endsAtMs: Long
+    )
 }

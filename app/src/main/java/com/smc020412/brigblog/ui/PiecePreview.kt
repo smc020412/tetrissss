@@ -1,6 +1,7 @@
 package com.smc020412.brigblog.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.smc020412.brigblog.game.Cell
 import com.smc020412.brigblog.game.PieceShapes
@@ -29,7 +31,14 @@ fun HoldPreview(
     compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    PreviewPanel(title = "HOLD", compact = compact, modifier = modifier) {
+    PreviewPanel(
+        title = "HOLD",
+        compact = compact,
+        modifier = modifier,
+        containerColor = Color(0xFF172637),
+        titleColor = GameColors.Accent,
+        borderColor = GameColors.Accent.copy(alpha = 0.42f)
+    ) {
         MiniPiece(pieceType, enabled = enabled, heightDp = miniHeightDp)
     }
 }
@@ -42,8 +51,15 @@ fun NextPreview(
     compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    PreviewPanel(title = "NEXT", compact = compact, modifier = modifier) {
-        Column(verticalArrangement = Arrangement.spacedBy(if (compact) scaledDp(6f) else scaledDp(10f))) {
+    PreviewPanel(
+        title = "NEXT",
+        compact = compact,
+        modifier = modifier,
+        containerColor = Color(0xFF281C35),
+        titleColor = Color(0xFFD7B5FF),
+        borderColor = Color(0xFFD7B5FF).copy(alpha = 0.42f)
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(if (compact) scaledDp(8f) else scaledDp(12f))) {
             pieces.take(maxPieces).forEach { MiniPiece(it, heightDp = miniHeightDp) }
         }
     }
@@ -54,12 +70,16 @@ private fun PreviewPanel(
     title: String,
     compact: Boolean = false,
     modifier: Modifier = Modifier,
+    containerColor: Color = GameColors.Panel,
+    titleColor: Color = GameColors.MutedText,
+    borderColor: Color? = null,
     content: @Composable () -> Unit
 ) {
     Surface(
-        color = GameColors.Panel,
+        color = containerColor,
         contentColor = GameColors.Text,
         shape = MaterialTheme.shapes.small,
+        border = borderColor?.let { BorderStroke(scaledDp(1f), it) },
         modifier = modifier
     ) {
         Column(
@@ -69,7 +89,7 @@ private fun PreviewPanel(
             Text(
                 title,
                 style = scaledTextStyle(if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium),
-                color = GameColors.MutedText,
+                color = titleColor,
                 maxLines = 1
             )
             content()
