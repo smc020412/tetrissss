@@ -7,7 +7,6 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 
-private const val HapticAmplitudeMultiplier = 5
 private const val HapticDurationMultiplier = 1.25f
 
 class GameHapticManager(
@@ -35,44 +34,44 @@ class GameHapticManager(
 
     private fun GameHapticEvent.effect(): VibrationEffect =
         when (this) {
-            GameHapticEvent.Menu -> oneShot(10, 48)
-            GameHapticEvent.Input -> oneShot(8, 54)
-            GameHapticEvent.Rotate -> oneShot(12, 72)
-            GameHapticEvent.SoftDrop -> oneShot(10, 62)
+            GameHapticEvent.Menu -> oneShot(10, 65)
+            GameHapticEvent.Input -> oneShot(8, 75)
+            GameHapticEvent.Rotate -> oneShot(12, 100)
+            GameHapticEvent.SoftDrop -> oneShot(10, 85)
             GameHapticEvent.Hold -> waveform(
                 timings = longArrayOf(0, 14, 18, 20),
-                amplitudes = intArrayOf(0, 72, 0, 98)
+                amplitudes = intArrayOf(0, 105, 0, 145)
             )
             GameHapticEvent.Start -> waveform(
                 timings = longArrayOf(0, 18, 18, 24, 20, 30),
-                amplitudes = intArrayOf(0, 70, 0, 105, 0, 138)
+                amplitudes = intArrayOf(0, 115, 0, 165, 0, 210)
             )
             GameHapticEvent.HardDrop -> waveform(
                 timings = longArrayOf(0, 18, 8, 26),
-                amplitudes = intArrayOf(0, 150, 0, 210)
+                amplitudes = intArrayOf(0, 185, 0, 250)
             )
             GameHapticEvent.LineClear -> waveform(
                 timings = longArrayOf(0, 20, 14, 26, 12, 22),
-                amplitudes = intArrayOf(0, 130, 0, 180, 0, 140)
+                amplitudes = intArrayOf(0, 150, 0, 205, 0, 165)
             )
             GameHapticEvent.GameOver -> waveform(
                 timings = longArrayOf(0, 34, 16, 52, 24, 90),
-                amplitudes = intArrayOf(0, 190, 0, 150, 0, 230)
+                amplitudes = intArrayOf(0, 210, 0, 160, 0, 245)
             )
         }
 
     private fun oneShot(durationMs: Long, amplitude: Int): VibrationEffect =
-        VibrationEffect.createOneShot(boostedDuration(durationMs), boostedAmplitude(amplitude))
+        VibrationEffect.createOneShot(boostedDuration(durationMs), boundedAmplitude(amplitude))
 
     private fun waveform(timings: LongArray, amplitudes: IntArray): VibrationEffect =
         VibrationEffect.createWaveform(
             timings.map(::boostedDuration).toLongArray(),
-            amplitudes.map(::boostedAmplitude).toIntArray(),
+            amplitudes.map(::boundedAmplitude).toIntArray(),
             -1
         )
 
-    private fun boostedAmplitude(amplitude: Int): Int =
-        if (amplitude == 0) 0 else (amplitude * HapticAmplitudeMultiplier).coerceIn(1, 255)
+    private fun boundedAmplitude(amplitude: Int): Int =
+        if (amplitude == 0) 0 else amplitude.coerceIn(1, 255)
 
     private fun boostedDuration(durationMs: Long): Long =
         (durationMs * HapticDurationMultiplier).toLong().coerceAtLeast(durationMs)

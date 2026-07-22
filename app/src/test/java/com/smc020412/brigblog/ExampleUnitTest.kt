@@ -1,13 +1,19 @@
 package com.smc020412.brigblog
 
 import com.smc020412.brigblog.game.Board
+import com.smc020412.brigblog.game.Cell
+import com.smc020412.brigblog.game.ClearKind
 import com.smc020412.brigblog.game.GameConstants
 import com.smc020412.brigblog.game.GameEngine
+import com.smc020412.brigblog.game.GameScoring
 import com.smc020412.brigblog.game.GameState
 import com.smc020412.brigblog.game.Piece
 import com.smc020412.brigblog.game.PieceType
 import com.smc020412.brigblog.game.SurvivalAttackKind
 import com.smc020412.brigblog.game.SurvivalAttackObject
+import com.smc020412.brigblog.game.TSpinType
+import com.smc020412.brigblog.audio.MenuMusicSessionGate
+import com.smc020412.brigblog.audio.sliderVolumeToGain
 import com.smc020412.brigblog.haptic.GameHapticEvent
 import com.smc020412.brigblog.haptic.HapticPulseGate
 import com.smc020412.brigblog.data.insertScore
@@ -80,12 +86,12 @@ class ExampleUnitTest {
         assertEquals(PieceType.O, dropped.board.cells[21][5])
         assertEquals(PieceType.O, dropped.board.cells[22][4])
         assertEquals(PieceType.O, dropped.board.cells[22][5])
-        assertEquals(42, dropped.score)
+        assertEquals(21, dropped.score)
         assertNotNull(dropped.currentPiece)
     }
 
     @Test
-    fun lockingPieceClearsBoardAndSpawnsNextPieceBeforeLineEffectEnds() {
+    fun lineClearTemporarilyBlocksPlayerActionsUntilTheEffectEnds() {
         val engine = GameEngine()
         val bottomY = GameConstants.BOARD_HEIGHT - 1
         val board = boardWithCells { x, y ->
@@ -102,21 +108,49 @@ class ExampleUnitTest {
 
         val locked = engine.lockCurrent(state)
         val finished = engine.finishLineClear(locked)
-        val moved = engine.move(locked, dx = 1, dy = 0)
+        val movedDuringClear = engine.move(locked, dx = 1, dy = 0)
+        val rotatedDuringClear = engine.rotate(locked, amount = 1)
+        val droppedDuringClear = engine.hardDrop(locked)
+        val heldDuringClear = engine.hold(locked)
+        val movedAfterClear = engine.move(finished, dx = 1, dy = 0)
 
         assertTrue(locked.isClearingLines)
         assertEquals(listOf(bottomY), locked.lastClearedRows)
         assertEquals(1, locked.lines)
-        assertEquals(100, locked.score)
+        assertEquals(10, locked.score)
         assertEquals(PieceType.T, locked.board.cells[bottomY][0])
         assertNotNull(locked.currentPiece)
         assertEquals(1, locked.lineClearShiftBlocks.size)
         assertEquals(bottomY - 1, locked.lineClearShiftBlocks.single().sourceY)
         assertEquals(bottomY, locked.lineClearShiftBlocks.single().targetY)
-        assertNotEquals(locked.currentPiece, moved.currentPiece)
+        assertEquals(locked, movedDuringClear)
+        assertEquals(locked, rotatedDuringClear)
+        assertEquals(locked, droppedDuringClear)
+        assertEquals(locked, heldDuringClear)
         assertFalse(finished.isClearingLines)
         assertEquals(PieceType.T, finished.board.cells[bottomY][0])
         assertEquals(locked.currentPiece, finished.currentPiece)
+        assertNotEquals(finished.currentPiece, movedAfterClear.currentPiece)
+    }
+
+    @Test
+    fun engineMarksPerfectClearOnlyAfterTheClearedBoardHasNoBlocks() {
+        val engine = GameEngine()
+        val bottomY = GameConstants.BOARD_HEIGHT - 1
+        val board = boardWithCells { x, y ->
+            if (y == bottomY && x !in 3..6) PieceType.Garbage else null
+        }
+        val state = stateWithPiece(
+            piece = Piece(PieceType.I, rotation = 0, x = 3, y = bottomY - 1),
+            board = board
+        )
+
+        val locked = engine.lockCurrent(state)
+
+        assertTrue(locked.lastClearResult?.isPerfectClear == true)
+        assertEquals(50, locked.lastClearResult?.perfectClearBonus)
+        assertEquals(60, locked.score)
+        assertTrue(locked.board.cells.flatten().all { it == null })
     }
 
     @Test
@@ -142,6 +176,207 @@ class ExampleUnitTest {
         val next = engine.lockCurrent(state)
 
         assertEquals(0, next.lockResetCount)
+    }
+
+    @Test
+    fun gravityUsesLinearFallSpeedFromLevelOneUntilTheSpeedCap() {
+        val engine = GameEngine()
+
+        assertEquals(680L, engine.gravityIntervalMs(1))
+        assertEquals(98L, engine.gravityIntervalMs(10))
+        assertEquals(89L, engine.gravityIntervalMs(11))
+        assertEquals(50L, engine.gravityIntervalMs(GameConstants.MAX_SPEED_LEVEL))
+        assertEquals(50L, engine.gravityIntervalMs(GameConstants.MAX_SPEED_LEVEL + 1))
+    }
+
+    @Test
+    fun comboAndBackToBackAwardOnlyTheQualifiedFollowUpBonus() {
+        val firstQuad = GameScoring.resolveClear(
+            clearedLines = 4,
+            level = 1,
+            comboCount = 0,
+            backToBackCount = 0,
+            tSpinType = TSpinType.None
+        )
+        val secondQuad = GameScoring.resolveClear(
+            clearedLines = 4,
+            level = 1,
+            comboCount = firstQuad.comboCount,
+            backToBackCount = firstQuad.backToBackCount,
+            tSpinType = TSpinType.None
+        )
+        val normalClear = GameScoring.resolveClear(
+            clearedLines = 1,
+            level = 1,
+            comboCount = secondQuad.comboCount,
+            backToBackCount = secondQuad.backToBackCount,
+            tSpinType = TSpinType.None
+        )
+
+        assertEquals(80, firstQuad.scoreAwarded)
+        assertFalse(firstQuad.usedBackToBackBonus)
+        assertEquals(125, secondQuad.scoreAwarded)
+        assertTrue(secondQuad.usedBackToBackBonus)
+        assertEquals(0, normalClear.backToBackCount)
+    }
+
+    @Test
+    fun perfectClearAwardsALineDependentBonusOnlyWhenTheBoardIsEmptyAfterClear() {
+        val perfectSingle = GameScoring.resolveClear(
+            clearedLines = 1,
+            level = 1,
+            comboCount = 0,
+            backToBackCount = 0,
+            tSpinType = TSpinType.None,
+            isPerfectClear = true
+        )
+        val normalSingle = GameScoring.resolveClear(
+            clearedLines = 1,
+            level = 1,
+            comboCount = 0,
+            backToBackCount = 0,
+            tSpinType = TSpinType.None
+        )
+        val perfectQuad = GameScoring.resolveClear(
+            clearedLines = 4,
+            level = 2,
+            comboCount = 0,
+            backToBackCount = 0,
+            tSpinType = TSpinType.None,
+            isPerfectClear = true
+        )
+
+        assertTrue(perfectSingle.isPerfectClear)
+        assertEquals(50, perfectSingle.perfectClearBonus)
+        assertEquals(60, perfectSingle.scoreAwarded)
+        assertFalse(normalSingle.isPerfectClear)
+        assertEquals(0, normalSingle.perfectClearBonus)
+        assertEquals(500, perfectQuad.perfectClearBonus)
+        assertEquals(660, perfectQuad.scoreAwarded)
+    }
+
+    @Test
+    fun miniTSpinTripleIsPromotedToAFullTSpinTripleForScoring() {
+        val result = GameScoring.resolveClear(
+            clearedLines = 3,
+            level = 1,
+            comboCount = 0,
+            backToBackCount = 0,
+            tSpinType = TSpinType.Mini
+        )
+
+        assertEquals(ClearKind.TSpinTriple, result.kind)
+        assertFalse(result.isMiniTSpin)
+        assertEquals(100, result.scoreAwarded)
+    }
+
+    @Test
+    fun everyReachableTSpinTripleUsesTheFullTSpinClassification() {
+        val engine = GameEngine()
+        val lockY = GameConstants.BOARD_HEIGHT - 3
+
+        // A newly-cleared triple requires a vertical T. Fill each of its three rows except
+        // the T cells, then verify every horizontal placement follows the Full-T rule.
+        for (rotation in listOf(1, 3)) {
+            for (x in 0..(GameConstants.BOARD_WIDTH - 3)) {
+                val piece = Piece(PieceType.T, rotation = rotation, x = x, y = lockY)
+                val pieceCells = engine.getCells(piece).toSet()
+                val board = boardWithCells { boardX, boardY ->
+                    if (boardY in lockY..(lockY + 2) && Cell(boardX, boardY) !in pieceCells) {
+                        PieceType.Garbage
+                    } else {
+                        null
+                    }
+                }
+
+                val locked = engine.lockCurrent(
+                    stateWithPiece(piece, board).copy(lastActionWasRotation = true)
+                )
+
+                assertEquals("rotation=$rotation, x=$x", 3, locked.lastClearedRows.size)
+                assertEquals("rotation=$rotation, x=$x", ClearKind.TSpinTriple, locked.lastClearResult?.kind)
+                assertFalse("rotation=$rotation, x=$x", locked.lastClearResult?.isMiniTSpin == true)
+            }
+        }
+    }
+
+    @Test
+    fun tSpinRequiresTheLastSuccessfulActionToBeARotationAndThreeCorners() {
+        val engine = GameEngine()
+        val bottomY = GameConstants.BOARD_HEIGHT - 1
+        val board = boardWithCells { x, y ->
+            when {
+                y == bottomY && x !in 3..5 -> PieceType.Garbage
+                y == bottomY - 1 && x in setOf(3, 5) -> PieceType.Garbage
+                else -> null
+            }
+        }
+        val tPiece = Piece(PieceType.T, rotation = 0, x = 3, y = bottomY - 1)
+
+        val spun = engine.lockCurrent(stateWithPiece(tPiece, board).copy(lastActionWasRotation = true))
+        val ordinary = engine.lockCurrent(stateWithPiece(tPiece, board))
+
+        assertEquals(ClearKind.TSpinSingle, spun.lastClearResult?.kind)
+        assertEquals(40, spun.lastClearResult?.scoreAwarded)
+        assertEquals(ClearKind.Single, ordinary.lastClearResult?.kind)
+        assertEquals(10, ordinary.lastClearResult?.scoreAwarded)
+    }
+
+    @Test
+    fun successfulMovementOrGravityCancelsTheTSpinRotationHistory() {
+        val engine = GameEngine()
+        val rotated = engine.rotate(stateWithPiece(Piece(PieceType.T, x = 3, y = 0)), amount = 1)
+
+        val moved = engine.move(rotated, dx = 1, dy = 0)
+        val fallen = engine.tick(rotated)
+
+        assertTrue(rotated.lastActionWasRotation)
+        assertFalse(moved.lastActionWasRotation)
+        assertFalse(fallen.lastActionWasRotation)
+    }
+
+    @Test
+    fun survivalAttackMovementCancelsTheTSpinRotationHistory() {
+        val engine = GameEngine()
+        val board = boardWithCells { x, y ->
+            if (y == GameConstants.BOARD_HEIGHT - 2 && x in 4..5) PieceType.Garbage else null
+        }
+        val state = survivalState(
+            board = board,
+            attackObjects = listOf(
+                SurvivalAttackObject(
+                    kind = SurvivalAttackKind.RisingGarbage,
+                    x = 0,
+                    y = GameConstants.BOARD_HEIGHT.toFloat(),
+                    cells = List(GameConstants.BOARD_WIDTH) { false }
+                )
+            )
+        ).copy(
+            currentPiece = Piece(PieceType.T, x = 3, y = GameConstants.BOARD_HEIGHT - 4),
+            lastActionWasRotation = true
+        )
+
+        val attacked = engine.tickSurvivalAttacks(state, deltaMs = 1_000L)
+
+        assertFalse(attacked.lastActionWasRotation)
+        assertNotEquals(state.currentPiece, attacked.currentPiece)
+    }
+
+    @Test
+    fun noClearResetsComboButKeepsTheBackToBackChain() {
+        val engine = GameEngine()
+        val state = stateWithPiece(Piece(PieceType.O, x = 3, y = GameConstants.BOARD_HEIGHT - 2)).copy(
+            comboCount = 4,
+            backToBackCount = 2,
+            heatLevel = 0.7f
+        )
+
+        val next = engine.lockCurrent(state)
+
+        assertEquals(0, next.comboCount)
+        assertEquals(2, next.backToBackCount)
+        assertEquals(0.16f, next.heatLevel)
+        assertNull(next.lastClearResult)
     }
 
     @Test
@@ -215,6 +450,30 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun staleMenuMusicSessionCannotStopANewerSession() {
+        val sessions = MenuMusicSessionGate()
+        val firstSession = sessions.start()
+
+        sessions.stop()
+        val secondSession = sessions.start()
+        sessions.finish(firstSession)
+
+        assertFalse(sessions.isActive(firstSession))
+        assertTrue(sessions.isActive(secondSession))
+        sessions.finish(secondSession)
+        assertFalse(sessions.hasActiveSession())
+    }
+
+    @Test
+    fun soundVolumeSliderUsesAClampedLinearGain() {
+        assertEquals(0f, sliderVolumeToGain(-0.25f))
+        assertEquals(0.25f, sliderVolumeToGain(0.25f))
+        assertEquals(0.5f, sliderVolumeToGain(0.5f))
+        assertEquals(0.75f, sliderVolumeToGain(0.75f))
+        assertEquals(1f, sliderVolumeToGain(1.25f))
+    }
+
+    @Test
     fun gameSessionRestoresActiveGameAndPausesItSafely() {
         val handle = SavedStateHandle()
         val original = GameSessionViewModel(handle)
@@ -222,7 +481,15 @@ class ExampleUnitTest {
         original.game = stateWithPiece(
             piece = Piece(PieceType.T, rotation = 2, x = 4, y = 9),
             queue = listOf(PieceType.I, PieceType.J, PieceType.L, PieceType.S, PieceType.Z)
-        ).copy(score = 1_200, lines = 17, level = 2)
+        ).copy(
+            score = 1_200,
+            lines = 17,
+            level = 2,
+            comboCount = 3,
+            backToBackCount = 2,
+            heatLevel = 0.58f,
+            lastActionWasRotation = true
+        )
         original.timeRemainingMs = 75_000L
         original.selectedTimeDuration = TimeLeaderboardDuration.TwoMinutes
         original.pendingSurvivalAttacks = listOf(SurvivalAttackKind.FallingGarbage)
@@ -235,6 +502,10 @@ class ExampleUnitTest {
         assertEquals(4, restored.game.currentPiece?.x)
         assertEquals(9, restored.game.currentPiece?.y)
         assertEquals(1_200, restored.game.score)
+        assertEquals(3, restored.game.comboCount)
+        assertEquals(2, restored.game.backToBackCount)
+        assertEquals(0.58f, restored.game.heatLevel)
+        assertTrue(restored.game.lastActionWasRotation)
         assertEquals(75_000L, restored.timeRemainingMs)
         assertEquals(TimeLeaderboardDuration.TwoMinutes, restored.selectedTimeDuration)
         assertEquals(listOf(SurvivalAttackKind.FallingGarbage), restored.pendingSurvivalAttacks)
@@ -258,6 +529,25 @@ class ExampleUnitTest {
         assertNull(result.insertedRank)
     }
 
+    @Test
+    fun tSpinMiniUsesTheBackCornerPatternAndGetsMiniScore() {
+        val engine = GameEngine()
+        val bottomY = GameConstants.BOARD_HEIGHT - 1
+        val board = boardWithCells { x, y ->
+            when {
+                y == bottomY && x != 4 -> PieceType.Garbage
+                y == bottomY - 1 && x == 3 -> PieceType.Garbage
+                else -> null
+            }
+        }
+        val tPiece = Piece(PieceType.T, rotation = 0, x = 3, y = bottomY - 1)
+
+        val spun = engine.lockCurrent(stateWithPiece(tPiece, board).copy(lastActionWasRotation = true))
+
+        assertEquals(ClearKind.TSpinMiniSingle, spun.lastClearResult?.kind)
+        assertEquals(20, spun.lastClearResult?.scoreAwarded)
+        assertTrue(spun.lastClearResult?.isMiniTSpin == true)
+    }
     private fun groundedState(): GameState {
         return stateWithPiece(
             board = emptyBoard(),

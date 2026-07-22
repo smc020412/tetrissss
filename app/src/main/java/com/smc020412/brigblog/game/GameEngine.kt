@@ -1,27 +1,12 @@
 package com.smc020412.brigblog.game
 
-import kotlin.math.max
+import kotlin.math.roundToLong
 import kotlin.random.Random
 
 class GameEngine(
     private val random: Random = Random.Default
 ) {
-    private val playablePieces = listOf(
-        PieceType.I,
-        PieceType.J,
-        PieceType.L,
-        PieceType.O,
-        PieceType.S,
-        PieceType.T,
-        PieceType.Z
-    )
-    private val scoreByLines = intArrayOf(0, 100, 300, 500, 800)
-    private val basicKicks = listOf(
-        Cell(0, 0), Cell(-1, 0), Cell(1, 0), Cell(0, -1), Cell(-2, 0), Cell(2, 0), Cell(0, 1)
-    )
-    private val iKicks = listOf(
-        Cell(0, 0), Cell(-2, 0), Cell(1, 0), Cell(-1, 0), Cell(2, 0), Cell(0, -1), Cell(0, 1)
-    )
+    private val bagRandomizer = SevenBagRandomizer(random)
     private val survivalAttackEngine = SurvivalAttackEngine(random) { board, piece -> collides(board, piece) }
 
     fun createGame(): GameState {
@@ -50,7 +35,7 @@ class GameEngine(
         if (!canAct(state)) return state
         val moved = tryMove(state, dx, dy)
             ?: return state.clearTransientEvents()
-        return state.copy(currentPiece = moved)
+        return state.copy(currentPiece = moved, lastActionWasRotation = false, lastRotationKickIndex = null)
             .withLockResetCountFrom(state)
             .clearTransientEvents()
     }
@@ -58,13 +43,19 @@ class GameEngine(
     fun rotate(state: GameState, amount: Int): GameState {
         if (!canAct(state)) return state
         val current = state.currentPiece ?: return state
-        val rotated = current.copy(rotation = (current.rotation + amount + 4) % 4)
-        val kicks = if (current.type == PieceType.I) iKicks else basicKicks
+        val targetRotation = (current.rotation + amount + 4) % 4
+        if (!SrsRotationSystem.isQuarterTurn(current.rotation, targetRotation)) return state.clearTransientEvents()
+        val rotated = current.copy(rotation = targetRotation)
+        val kicks = SrsRotationSystem.kicksFor(current.type, current.rotation, targetRotation)
 
-        for (kick in kicks) {
+        for ((kickIndex, kick) in kicks.withIndex()) {
             val candidate = rotated.copy(x = rotated.x + kick.x, y = rotated.y + kick.y)
             if (!collides(state.board, candidate)) {
-                return state.copy(currentPiece = candidate)
+                return state.copy(
+                    currentPiece = candidate,
+                    lastActionWasRotation = true,
+                    lastRotationKickIndex = kickIndex
+                )
                     .withLockResetCountFrom(state)
                     .clearTransientEvents()
             }
@@ -79,7 +70,8 @@ class GameEngine(
             ?: return state.clearTransientEvents()
         return state.copy(
             currentPiece = moved,
-            score = state.score + 1
+            lastActionWasRotation = false,
+            lastRotationKickIndex = null
         ).copy(lockResetCount = if (isGrounded(state)) state.lockResetCount else 0)
             .clearTransientEvents()
     }
@@ -118,7 +110,9 @@ class GameEngine(
             lastClearedRows = emptyList(),
             lastDropDistance = 0,
             lockResetCount = 0,
-            clearingBlocks = state.clearingBlocks
+            clearingBlocks = state.clearingBlocks,
+            lastActionWasRotation = false,
+            lastRotationKickIndex = null
         )
     }
 
@@ -126,7 +120,11 @@ class GameEngine(
         if (!canAct(state)) return state
         val moved = tryMove(state, 0, 1)
             ?: return lockCurrent(state, 0)
-        return state.copy(currentPiece = moved).clearTransientEvents()
+        return state.copy(
+            currentPiece = moved,
+            lastActionWasRotation = false,
+            lastRotationKickIndex = null
+        ).clearTransientEvents()
     }
 
     fun lockCurrent(state: GameState, dropDistance: Int = 0): GameState {
@@ -168,14 +166,17 @@ class GameEngine(
             }
         }
         val clearCount = clearedRows.size
-        val dropScore = dropDistance * 2
+        val dropScore = dropDistance
 
         if (clearCount == 0) {
             val spawned = spawnPiece(
                 state.copy(
                     board = lockedBoard,
                     currentPiece = null,
-                    score = state.score + dropScore
+                    score = state.score + dropScore,
+                    comboCount = 0,
+                    heatLevel = GameScoring.heatAfterNoClear(state.backToBackCount),
+                    lastClearResult = null
                 )
             )
 
@@ -187,18 +188,35 @@ class GameEngine(
 
         val newLines = state.lines + clearCount
         val newLevel = newLines / 10 + 1
-        val clearScore = scoreByLines.getOrElse(clearCount) { 0 } * newLevel
+        val clearedBoard = clearRows(lockedBoard).board
+        val clearResult = GameScoring.resolveClear(
+            clearedLines = clearCount,
+            level = newLevel,
+            comboCount = state.comboCount,
+            backToBackCount = state.backToBackCount,
+            tSpinType = TSpinRules.classify(
+                board = state.board,
+                piece = current,
+                lastActionWasRotation = state.lastActionWasRotation,
+                kickIndex = state.lastRotationKickIndex
+            ),
+            isPerfectClear = clearedBoard.cells.all { row -> row.all { it == null } }
+        )
 
         val spawned = spawnPiece(
             state.copy(
-                board = clearRows(lockedBoard).board,
+                board = clearedBoard,
                 currentPiece = null,
-                score = state.score + clearScore + dropScore,
+                score = state.score + clearResult.scoreAwarded + dropScore,
                 lines = newLines,
                 level = newLevel,
                 lockResetCount = 0,
                 clearingBlocks = clearingBlocks,
-                lineClearShiftBlocks = lineClearShiftBlocks
+                lineClearShiftBlocks = lineClearShiftBlocks,
+                comboCount = clearResult.comboCount,
+                backToBackCount = clearResult.backToBackCount,
+                heatLevel = clearResult.heatLevel,
+                lastClearResult = clearResult
             )
         )
 
@@ -206,7 +224,8 @@ class GameEngine(
             lastClearedRows = clearedRows,
             lastDropDistance = dropDistance,
             clearingBlocks = clearingBlocks,
-            lineClearShiftBlocks = lineClearShiftBlocks
+            lineClearShiftBlocks = lineClearShiftBlocks,
+            lastClearResult = clearResult
         )
     }
 
@@ -217,7 +236,8 @@ class GameEngine(
             lastClearedRows = emptyList(),
             lastDropDistance = 0,
             clearingBlocks = emptyList(),
-            lineClearShiftBlocks = emptyList()
+            lineClearShiftBlocks = emptyList(),
+            lastClearResult = null
         )
     }
 
@@ -245,11 +265,17 @@ class GameEngine(
         return (8 - highest) / 8f
     }
 
-    fun gravityIntervalMs(level: Int): Long =
-        max(
-            GameConstants.MIN_GRAVITY_MS,
-            GameConstants.INITIAL_GRAVITY_MS - (level - 1) * GameConstants.GRAVITY_STEP_MS
-        )
+    fun gravityIntervalMs(level: Int): Long {
+        val minimumFallSpeed = 1_000.0 / GameConstants.INITIAL_GRAVITY_MS
+        val maximumFallSpeed = 1_000.0 / GameConstants.MIN_GRAVITY_MS
+        val levelProgress = ((level - 1).toDouble() / (GameConstants.MAX_SPEED_LEVEL - 1))
+            .coerceIn(0.0, 1.0)
+        val fallSpeed = minimumFallSpeed + (maximumFallSpeed - minimumFallSpeed) * levelProgress
+
+        return (1_000.0 / fallSpeed)
+            .roundToLong()
+            .coerceAtLeast(GameConstants.MIN_GRAVITY_MS)
+    }
 
     fun getCells(piece: Piece): List<Cell> =
         PieceShapes.shapes.getValue(piece.type)[piece.rotation].map { cell ->
@@ -274,7 +300,7 @@ class GameEngine(
         )
 
     private fun createBag(): List<PieceType> =
-        playablePieces.shuffled(random)
+        bagRandomizer.nextBag()
 
     private fun ensureQueue(queue: List<PieceType>, minCount: Int): List<PieceType> {
         val nextQueue = queue.toMutableList()
@@ -300,12 +326,14 @@ class GameEngine(
             lastClearedRows = emptyList(),
             lastDropDistance = 0,
             lockResetCount = 0,
-            clearingBlocks = state.clearingBlocks
+            clearingBlocks = state.clearingBlocks,
+            lastActionWasRotation = false,
+            lastRotationKickIndex = null
         )
     }
 
     private fun canAct(state: GameState): Boolean =
-        state.currentPiece != null && !state.isGameOver && !state.isPaused
+        state.currentPiece != null && !state.isGameOver && !state.isPaused && !state.isClearingLines
 
     private fun tryMove(state: GameState, dx: Int, dy: Int): Piece? {
         val current = state.currentPiece ?: return null
@@ -313,7 +341,7 @@ class GameEngine(
         return if (collides(state.board, moved)) null else moved
     }
 
-    private data class ClearResult(
+    private data class ClearedRowsResult(
         val board: Board,
         val rows: List<Int>
     )
@@ -323,7 +351,7 @@ class GameEngine(
             if (row.all { it != null }) y else null
         }
 
-    private fun clearRows(board: Board): ClearResult {
+    private fun clearRows(board: Board): ClearedRowsResult {
         val keptRows = mutableListOf<List<PieceType?>>()
         val clearedRows = findClearedRows(board)
 
@@ -337,7 +365,7 @@ class GameEngine(
             List<PieceType?>(board.width) { null }
         }
 
-        return ClearResult(
+        return ClearedRowsResult(
             board = board.copy(cells = emptyRows + keptRows),
             rows = clearedRows
         )

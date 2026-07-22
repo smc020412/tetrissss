@@ -12,4 +12,6 @@
 /captures
 .externalNativeBuild
 .cxx
+# Generated signed APK/AAB packages and release metadata.
+/app/release/
 local.properties

@@ -126,12 +126,17 @@ private object GameStateCodec {
         state.lastDropDistance, state.lockResetCount,
         state.attackObjects.joinToString(";") { attack ->
             "${attack.kind.name},${attack.x},${attack.y},${attack.cells.joinToString("") { if (it) "1" else "0" }}"
-        }
+        },
+        state.comboCount,
+        state.backToBackCount,
+        state.heatLevel,
+        state.lastActionWasRotation,
+        state.lastRotationKickIndex ?: -1
     ).joinToString("|")
 
     fun decode(encoded: String): GameState? = runCatching {
         val parts = encoded.split("|")
-        require(parts.size == 13)
+        require(parts.size == 13 || parts.size == 17 || parts.size == 18)
         require(parts[0].length == GameConstants.BOARD_WIDTH * GameConstants.BOARD_HEIGHT)
         val board = Board(
             GameConstants.BOARD_WIDTH,
@@ -155,7 +160,12 @@ private object GameStateCodec {
             lastDropDistance = parts[10].toInt(),
             lockResetCount = parts[11].toInt(),
             attackObjects = parts[12].takeIf { it.isNotEmpty() }
-                ?.split(';')?.mapNotNull(::decodeAttack).orEmpty()
+                ?.split(';')?.mapNotNull(::decodeAttack).orEmpty(),
+            comboCount = parts.getOrNull(13)?.toInt() ?: 0,
+            backToBackCount = parts.getOrNull(14)?.toInt() ?: 0,
+            heatLevel = parts.getOrNull(15)?.toFloat() ?: 0f,
+            lastActionWasRotation = parts.getOrNull(16)?.toBooleanStrict() ?: false,
+            lastRotationKickIndex = parts.getOrNull(17)?.toIntOrNull()?.takeIf { it >= 0 }
         )
     }.getOrNull()
 

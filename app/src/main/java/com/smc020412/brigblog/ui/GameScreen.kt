@@ -59,6 +59,7 @@ import com.smc020412.brigblog.data.ControlLayoutRepository
 import com.smc020412.brigblog.data.GameSettings
 import com.smc020412.brigblog.data.GameSettingsRepository
 import com.smc020412.brigblog.data.ScoreRepository
+import com.smc020412.brigblog.game.ClearResult
 import com.smc020412.brigblog.game.GameConstants
 import com.smc020412.brigblog.game.GameEngine
 import com.smc020412.brigblog.game.GameState
@@ -72,6 +73,7 @@ private const val SurvivalAttackStrikeMs = 430L
 private const val SurvivalThreatChargeMs = 5_000L
 private const val PrivacyPolicyUrl = "https://smc020412.github.io/gridream-policy/"
 private const val HardDropImpactDurationMs = 280L
+private const val ClearFeedbackDurationMs = 650L
 
 val LocalGameUiScale = androidx.compose.runtime.staticCompositionLocalOf { 1f }
 
@@ -114,6 +116,8 @@ fun GameScreen() {
     var lockElapsed by session::lockElapsed
     var fallElapsed by session::fallElapsed
     var lineClearElapsed by session::lineClearElapsed
+    var clearFeedbackElapsed by remember { mutableLongStateOf(0L) }
+    var clearFeedback by remember { mutableStateOf<ClearResult?>(null) }
     var hardDropImpactElapsed by remember { mutableLongStateOf(0L) }
     var hardDropImpact by remember { mutableStateOf<HardDropImpact?>(null) }
     var survivalThreatElapsed by session::survivalThreatElapsed
@@ -200,9 +204,7 @@ fun GameScreen() {
         appMode == AppMode.ClassicGame || appMode == AppMode.TimeGame || appMode == AppMode.SurvivalGame
 
     fun survivalThreatClearRequirement(level: Int): Int {
-        val maxSpeedLevel = ((GameConstants.INITIAL_GRAVITY_MS - GameConstants.MIN_GRAVITY_MS) +
-            GameConstants.GRAVITY_STEP_MS - 1) / GameConstants.GRAVITY_STEP_MS + 1
-        return level.coerceIn(1, maxSpeedLevel.toInt())
+        return level.coerceIn(1, GameConstants.MAX_SPEED_LEVEL)
     }
 
     fun finishGame(completedGame: GameState) {
@@ -237,6 +239,8 @@ fun GameScreen() {
 
         val clearedLineCount = (next.lines - previous.lines).coerceAtLeast(0)
         if (clearedLineCount > 0) {
+            clearFeedback = next.lastClearResult
+            clearFeedbackElapsed = 0L
             audio.play(GameSoundEvent.LineClear)
             haptic.pulse(GameHapticEvent.LineClear)
             lineClearElapsed = 0L
@@ -259,6 +263,8 @@ fun GameScreen() {
         lockElapsed = 0L
         fallElapsed = 0L
         lineClearElapsed = 0L
+        clearFeedbackElapsed = 0L
+        clearFeedback = null
         hardDropImpactElapsed = 0L
         hardDropImpact = null
         survivalThreatElapsed = 0L
@@ -431,8 +437,26 @@ fun GameScreen() {
                 }
             }
 
+            if (clearFeedback != null) {
+                clearFeedbackElapsed += delta
+                if (clearFeedbackElapsed >= ClearFeedbackDurationMs) {
+                    clearFeedbackElapsed = 0L
+                    clearFeedback = null
+                }
+            }
+
             val gameModeActive = appMode == AppMode.ClassicGame || appMode == AppMode.TimeGame || appMode == AppMode.SurvivalGame
             if (gameModeActive && !game.isPaused && !game.isGameOver && !showSettings && !showRestartConfirm && !showMainMenuConfirm && !showControlsEditor) {
+                if (game.isClearingLines) {
+                    lineClearElapsed += delta
+                    if (lineClearElapsed >= GameConstants.LINE_CLEAR_ANIMATION_MS) {
+                        lineClearElapsed = 0L
+                        applyState(engine.finishLineClear(game))
+                    }
+                    continue
+                }
+                lineClearElapsed = 0L
+
                 if (appMode == AppMode.TimeGame) {
                     timeRemainingMs = (timeRemainingMs - delta).coerceAtLeast(0L)
                     if (timeRemainingMs == 0L) {
@@ -440,16 +464,6 @@ fun GameScreen() {
                         applyState(game.copy(isGameOver = true))
                         continue
                     }
-                }
-
-                if (game.isClearingLines) {
-                    lineClearElapsed += delta
-                    if (lineClearElapsed >= GameConstants.LINE_CLEAR_ANIMATION_MS) {
-                        lineClearElapsed = 0L
-                        applyState(engine.finishLineClear(game))
-                    }
-                } else {
-                    lineClearElapsed = 0L
                 }
 
                 if (appMode == AppMode.SurvivalGame && game.attackObjects.isNotEmpty()) {
@@ -572,9 +586,14 @@ fun GameScreen() {
             val useWideLayout = maxWidth >= 900.dp && maxWidth > maxHeight
             val compact = !useWideLayout
             val panelActive = game.isPaused || game.isGameOver || showSettings || showRestartConfirm || showMainMenuConfirm || showControlsEditor
-            val inputLocked = panelActive || controlsEditMode
+            val inputLocked = panelActive || controlsEditMode || game.isClearingLines
             val lineClearProgress = if (game.isClearingLines) {
                 (lineClearElapsed / GameConstants.LINE_CLEAR_ANIMATION_MS.toFloat()).coerceIn(0f, 1f)
+            } else {
+                1f
+            }
+            val clearFeedbackProgress = if (clearFeedback != null) {
+                (clearFeedbackElapsed / ClearFeedbackDurationMs.toFloat()).coerceIn(0f, 1f)
             } else {
                 1f
             }
@@ -648,6 +667,8 @@ fun GameScreen() {
                     controlPlacements = controlPlacements,
                     selectedControlAction = selectedControlAction,
                     lineClearProgress = lineClearProgress,
+                    clearFeedback = clearFeedback,
+                    clearFeedbackProgress = clearFeedbackProgress,
                     hardDropImpact = hardDropImpact,
                     hardDropImpactProgress = hardDropImpactProgress,
                     noiseTimeMs = fallElapsed + lockElapsed + lineClearElapsed,
@@ -1337,6 +1358,8 @@ private fun BoardStage(
     controlPlacements: List<ControlPlacement>,
     selectedControlAction: ControlAction,
     lineClearProgress: Float,
+    clearFeedback: ClearResult?,
+    clearFeedbackProgress: Float,
     hardDropImpact: HardDropImpact?,
     hardDropImpactProgress: Float,
     noiseTimeMs: Long,
@@ -1369,6 +1392,8 @@ private fun BoardStage(
                 timeRemainingMs = timeRemainingMs,
                 timeTotalMs = timeTotalMs,
                 lineClearProgress = lineClearProgress,
+                clearFeedback = clearFeedback,
+                clearFeedbackProgress = clearFeedbackProgress,
                 hardDropImpact = hardDropImpact,
                 hardDropImpactProgress = hardDropImpactProgress,
                 noiseTimeMs = noiseTimeMs,
@@ -1379,6 +1404,8 @@ private fun BoardStage(
                 engine = engine,
                 threatRatio = survivalThreatRatio,
                 lineClearProgress = lineClearProgress,
+                clearFeedback = clearFeedback,
+                clearFeedbackProgress = clearFeedbackProgress,
                 hardDropImpact = hardDropImpact,
                 hardDropImpactProgress = hardDropImpactProgress,
                 noiseTimeMs = noiseTimeMs,
@@ -1388,6 +1415,8 @@ private fun BoardStage(
                 state = game,
                 engine = engine,
                 lineClearProgress = lineClearProgress,
+                clearFeedback = clearFeedback,
+                clearFeedbackProgress = clearFeedbackProgress,
                 hardDropImpact = hardDropImpact,
                 hardDropImpactProgress = hardDropImpactProgress,
                 noiseTimeMs = noiseTimeMs,
@@ -1447,30 +1476,29 @@ private fun SurvivalBoardFrame(
     engine: GameEngine,
     threatRatio: Float,
     lineClearProgress: Float,
+    clearFeedback: ClearResult?,
+    clearFeedbackProgress: Float,
     hardDropImpact: HardDropImpact?,
     hardDropImpactProgress: Float,
     noiseTimeMs: Long,
     modifier: Modifier = Modifier
 ) {
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(scaledDp(5f)),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        SurvivalThreatGauge(ratio = threatRatio, modifier = Modifier.width(scaledDp(8f)).fillMaxHeight())
-        GameBoardCanvas(
-            state = game,
-            engine = engine,
-            lineClearProgress = lineClearProgress,
-            hardDropImpact = hardDropImpact,
-            hardDropImpactProgress = hardDropImpactProgress,
-            noiseTimeMs = noiseTimeMs,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-        )
-        SurvivalThreatGauge(ratio = threatRatio, modifier = Modifier.width(scaledDp(8f)).fillMaxHeight())
-    }
+    TimedBoardFrame(
+        game = game,
+        engine = engine,
+        timer = BoardTimerState(
+            progress = threatRatio,
+            text = "THREAT ${formatThreatTime(threatRatio)}",
+            direction = BoardTimerDirection.Charge
+        ),
+        lineClearProgress = lineClearProgress,
+        clearFeedback = clearFeedback,
+        clearFeedbackProgress = clearFeedbackProgress,
+        hardDropImpact = hardDropImpact,
+        hardDropImpactProgress = hardDropImpactProgress,
+        noiseTimeMs = noiseTimeMs,
+        modifier = modifier
+    )
 }
 
 @Composable
@@ -1480,6 +1508,8 @@ private fun TimeBoardFrame(
     timeRemainingMs: Long,
     timeTotalMs: Long,
     lineClearProgress: Float,
+    clearFeedback: ClearResult?,
+    clearFeedbackProgress: Float,
     hardDropImpact: HardDropImpact?,
     hardDropImpactProgress: Float,
     noiseTimeMs: Long,
@@ -1491,100 +1521,34 @@ private fun TimeBoardFrame(
         (timeRemainingMs / timeTotalMs.toFloat()).coerceIn(0f, 1f)
     }
 
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(scaledDp(5f))
-    ) {
-        Text(
+    TimedBoardFrame(
+        game = game,
+        engine = engine,
+        timer = BoardTimerState(
+            progress = timeRatio,
             text = formatTime(timeRemainingMs),
-            style = scaledTextStyle(MaterialTheme.typography.titleMedium),
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            color = timeGaugeColor(timeRatio),
-            maxLines = 1
-        )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(scaledDp(5f)),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            TimeGauge(ratio = timeRatio, modifier = Modifier.width(scaledDp(8f)).fillMaxHeight())
-            GameBoardCanvas(
-                state = game,
-                engine = engine,
-                lineClearProgress = lineClearProgress,
-                hardDropImpact = hardDropImpact,
-                hardDropImpactProgress = hardDropImpactProgress,
-                noiseTimeMs = noiseTimeMs,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-            )
-            TimeGauge(ratio = timeRatio, modifier = Modifier.width(scaledDp(8f)).fillMaxHeight())
-        }
-    }
+            direction = BoardTimerDirection.Countdown
+        ),
+        lineClearProgress = lineClearProgress,
+        clearFeedback = clearFeedback,
+        clearFeedbackProgress = clearFeedbackProgress,
+        hardDropImpact = hardDropImpact,
+        hardDropImpactProgress = hardDropImpactProgress,
+        noiseTimeMs = noiseTimeMs,
+        modifier = modifier
+    )
 }
-
-@Composable
-private fun TimeGauge(
-    ratio: Float,
-    modifier: Modifier = Modifier
-) {
-    val fillColor = timeGaugeColor(ratio)
-
-    Canvas(modifier = modifier) {
-        drawRect(color = GameColors.Grid.copy(alpha = 0.72f), size = size)
-        val fillHeight = size.height * ratio.coerceIn(0f, 1f)
-        drawRect(
-            color = fillColor,
-            topLeft = Offset(0f, size.height - fillHeight),
-            size = Size(size.width, fillHeight)
-        )
-    }
-}
-
-@Composable
-private fun SurvivalThreatGauge(
-    ratio: Float,
-    modifier: Modifier = Modifier
-) {
-    val fillColor = survivalThreatGaugeColor(ratio)
-
-    Canvas(modifier = modifier) {
-        drawRect(color = GameColors.Grid.copy(alpha = 0.72f), size = size)
-        val fillHeight = size.height * ratio.coerceIn(0f, 1f)
-        drawRect(
-            color = fillColor,
-            topLeft = Offset(0f, size.height - fillHeight),
-            size = Size(size.width, fillHeight)
-        )
-    }
-}
-
-private fun timeGaugeColor(ratio: Float): Color =
-    when {
-        ratio > 0.75f -> Color(0xFF4DE17E)
-        ratio > 0.50f -> GameColors.Warning
-        ratio > 0.25f -> Color(0xFFFF9F1C)
-        else -> GameColors.Danger
-    }
-
-private fun survivalThreatGaugeColor(ratio: Float): Color =
-    when {
-        ratio < 0.25f -> Color(0xFF4DE17E)
-        ratio < 0.50f -> GameColors.Warning
-        ratio < 0.75f -> Color(0xFFFF9F1C)
-        else -> GameColors.Danger
-    }
 
 private fun formatTime(timeMs: Long): String {
     val totalSeconds = (timeMs / 1_000L).coerceAtLeast(0L)
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return "%d:%02d".format(minutes, seconds)
+}
+
+private fun formatThreatTime(ratio: Float): String {
+    val tenths = (ratio.coerceIn(0f, 1f) * SurvivalThreatChargeMs / 100L).toInt()
+    return "${tenths / 10}.${tenths % 10}"
 }
 
 @Composable

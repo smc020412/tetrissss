@@ -35,8 +35,7 @@ class GameAudioManager(
     private var volume = 0.75f
     @Volatile
     private var outputGain = sliderVolumeToGain(volume)
-    @Volatile
-    private var menuMusicRunning = false
+    private val menuMusicSessions = MenuMusicSessionGate()
     @Volatile
     private var currentMenuTrack: AudioTrack? = null
     @Volatile
@@ -84,21 +83,17 @@ class GameAudioManager(
     @Synchronized
     fun startMenuMusic() {
         if (released) return
-        if (menuMusicRunning) return
+        if (menuMusicSessions.hasActiveSession()) return
 
-        menuMusicRunning = true
+        val sessionId = menuMusicSessions.start()
         menuMusicThread = thread(name = "brigblog-menu-bgm", isDaemon = true) {
-            runCatching {
-                playMenuMusicLoop()
-            }.onFailure {
-                menuMusicRunning = false
-            }
+            runCatching { playMenuMusicLoop(sessionId) }
         }
     }
 
     @Synchronized
     fun stopMenuMusic() {
-        menuMusicRunning = false
+        menuMusicSessions.stop()
         currentMenuTrack?.let { track ->
             runCatching { track.pause() }
             runCatching { track.flush() }
@@ -127,7 +122,7 @@ class GameAudioManager(
         }
     }
 
-    private fun playMenuMusicLoop() {
+    private fun playMenuMusicLoop(sessionId: Long) {
         val track = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -147,20 +142,58 @@ class GameAudioManager(
             .build()
 
         try {
-            currentMenuTrack = track
+            if (!attachMenuTrack(sessionId, track)) return
             track.play()
             var step = 0
-            while (menuMusicRunning) {
+            while (menuMusicSessions.isActive(sessionId)) {
                 val chunk = buildMenuMusicStep(step % MenuBarSteps, outputGain)
                 track.write(chunk, 0, chunk.size)
                 step++
             }
         } finally {
-            if (currentMenuTrack === track) currentMenuTrack = null
+            detachMenuTrack(sessionId, track)
             runCatching { track.release() }
         }
     }
 
+    @Synchronized
+    private fun attachMenuTrack(sessionId: Long, track: AudioTrack): Boolean {
+        if (released || !menuMusicSessions.isActive(sessionId)) return false
+        currentMenuTrack = track
+        return true
+    }
+
+    @Synchronized
+    private fun detachMenuTrack(sessionId: Long, track: AudioTrack) {
+        if (currentMenuTrack === track) currentMenuTrack = null
+        menuMusicSessions.finish(sessionId)
+    }
+
+}
+
+/** Keeps an old BGM worker from changing the state of a newer playback session. */
+internal class MenuMusicSessionGate {
+    private var nextSessionId = 0L
+    private var activeSessionId: Long? = null
+
+    @Synchronized
+    fun start(): Long = (++nextSessionId).also { activeSessionId = it }
+
+    @Synchronized
+    fun stop() {
+        activeSessionId = null
+    }
+
+    @Synchronized
+    fun hasActiveSession(): Boolean = activeSessionId != null
+
+    @Synchronized
+    fun isActive(sessionId: Long): Boolean = activeSessionId == sessionId
+
+    @Synchronized
+    fun finish(sessionId: Long) {
+        if (activeSessionId == sessionId) activeSessionId = null
+    }
 }
 
 private const val MenuStepMs = 150
@@ -208,10 +241,8 @@ private fun pulseWave(hz: Float, sampleIndex: Int, duty: Double): Double {
     return square * (0.84 + abs(phase - 0.5) * 0.16)
 }
 
-private fun sliderVolumeToGain(value: Float): Float {
-    val x = value.coerceIn(0f, 1f)
-    return (x * x * (3f - 2f * x)).coerceIn(0f, 1f)
-}
+internal fun sliderVolumeToGain(value: Float): Float =
+    value.coerceIn(0f, 1f)
 
 enum class GameSoundEvent(val priority: Int) {
     Move(1),

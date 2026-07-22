@@ -20,6 +20,12 @@ data class SurvivalAttackObject(
     val cells: List<Boolean> = emptyList()
 )
 
+enum class TSpinType {
+    None,
+    Mini,
+    Full
+}
+
 data class GameState(
     val board: Board,
     val queue: List<PieceType>,
@@ -36,7 +42,13 @@ data class GameState(
     val lockResetCount: Int = 0,
     val clearingBlocks: List<ClearingBlock> = emptyList(),
     val lineClearShiftBlocks: List<LineClearShiftBlock> = emptyList(),
-    val attackObjects: List<SurvivalAttackObject> = emptyList()
+    val attackObjects: List<SurvivalAttackObject> = emptyList(),
+    val comboCount: Int = 0,
+    val backToBackCount: Int = 0,
+    val heatLevel: Float = 0f,
+    val lastActionWasRotation: Boolean = false,
+    val lastRotationKickIndex: Int? = null,
+    val lastClearResult: ClearResult? = null
 ) {
     val isClearingLines: Boolean
         get() = clearingBlocks.isNotEmpty() || lineClearShiftBlocks.isNotEmpty()

@@ -13,6 +13,8 @@ object GameColors {
     val Accent = Color(0xFF8FD6FF)
     val Warning = Color(0xFFFFD166)
     val Danger = Color(0xFFFF5D73)
+    val Heat = Color(0xFFFF8A3D)
+    val Overheat = Color(0xFFFF4D5E)
 
     fun piece(type: PieceType): Color =
         when (type) {

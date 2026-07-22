@@ -14,6 +14,6 @@ object GameConstants {
     const val LINE_CLEAR_ANIMATION_MS = 220L
 
     const val INITIAL_GRAVITY_MS = 680L
-    const val GRAVITY_STEP_MS = 55L
     const val MIN_GRAVITY_MS = 50L
+    const val MAX_SPEED_LEVEL = 20
 }

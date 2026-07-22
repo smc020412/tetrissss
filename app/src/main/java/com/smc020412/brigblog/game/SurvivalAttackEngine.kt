@@ -74,11 +74,15 @@ class SurvivalAttackEngine(
         }
 
         val nextBoard = state.board.copy(cells = boardCells)
+        val resolvedPiece = pushCurrentPieceAboveBoardCollision(nextBoard, state.currentPiece)
+        val attackMovedCurrentPiece = resolvedPiece != state.currentPiece
         return state.copy(
             board = nextBoard,
-            currentPiece = pushCurrentPieceAboveBoardCollision(nextBoard, state.currentPiece),
+            currentPiece = resolvedPiece,
             isGameOver = state.isGameOver || causedGameOver,
-            attackObjects = nextObjects
+            attackObjects = nextObjects,
+            lastActionWasRotation = if (attackMovedCurrentPiece) false else state.lastActionWasRotation,
+            lastRotationKickIndex = if (attackMovedCurrentPiece) null else state.lastRotationKickIndex
         )
     }
 
